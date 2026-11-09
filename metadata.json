@@ -1,0 +1,6 @@
+{
+  "name": "Cebu Prime Properties",
+  "description": "Premium real estate platform for luxury properties and residences in Cebu, Philippines.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

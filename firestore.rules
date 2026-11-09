@@ -1,0 +1,153 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny all by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email.lower() == 'martiligando@gmail.com' ||
+        request.auth.token.role == 'superadmin' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin')
+      );
+    }
+
+    function isAgent() {
+      return isSignedIn() && (
+        request.auth.token.role == 'agent' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'agent')
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation for UserProfile
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 200 &&
+             data.displayName is string && data.displayName.size() <= 150 &&
+             data.role in ['superadmin', 'agent'] &&
+             data.status in ['active', 'disabled', 'deleted'];
+    }
+
+    // Validation for Building
+    function isValidBuilding(data) {
+      return data.buildingId is string && data.buildingId.size() <= 128 &&
+             data.buildingName is string && data.buildingName.size() <= 128 &&
+             data.location is string && data.location.size() <= 100 &&
+             data.address is string && data.address.size() <= 250 &&
+             data.description is string && data.description.size() <= 3000 &&
+             data.buildingImages is list && data.buildingImages.size() <= 20 &&
+             data.amenities is list && data.amenities.size() <= 50;
+    }
+
+    // Validation for Property
+    function isValidProperty(data) {
+      return data.propertyId is string && data.propertyId.size() <= 128 &&
+             data.buildingId is string && data.buildingId.size() <= 128 &&
+             data.buildingName is string && data.buildingName.size() <= 128 &&
+             data.propertyTitle is string && data.propertyTitle.size() <= 150 &&
+             data.location is string && data.location.size() <= 100 &&
+             data.address is string && data.address.size() <= 250 &&
+             data.propertyType in ['Condo', 'Penthouse', 'House & Lot', 'Commercial', 'Townhouse'] &&
+             data.listingType in ['sale', 'rent'] &&
+             data.price is number && data.price >= 0 &&
+             data.bedrooms is number && data.bedrooms >= 0 &&
+             data.bathrooms is number && data.bathrooms >= 0 &&
+             data.floorArea is number && data.floorArea >= 0 &&
+             data.description is string && data.description.size() <= 3000 &&
+             data.amenities is list && data.amenities.size() <= 50 &&
+             data.images is list && data.images.size() <= 30 &&
+             data.featured is bool &&
+             data.status in ['draft', 'pending', 'approved', 'rejected'];
+    }
+
+    // Validation for Inquiry
+    function isValidInquiry(data) {
+      return data.inquiryId is string && data.inquiryId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() <= 150 &&
+             data.email is string && data.email.size() <= 200 &&
+             data.phone is string && data.phone.size() <= 50 &&
+             data.propertyInterest is string && data.propertyInterest.size() <= 200;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Buildings collection
+    match /buildings/{buildingId} {
+      allow get: if isValidId(buildingId);
+      allow list: if true;
+      allow create: if isValidId(buildingId) && isValidBuilding(incoming());
+      allow update, delete: if isAdmin();
+    }
+
+    // Properties collection
+    match /properties/{propertyId} {
+      // Public read ONLY for approved properties. Agents can see their own, and Super Admins can see all.
+      allow get: if isValidId(propertyId) && (
+        resource.data.status == 'approved' ||
+        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin()))
+      );
+
+      allow list: if resource.data.status == 'approved' ||
+        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin()));
+
+      allow create: if isValidId(propertyId) && isValidProperty(incoming()) && (
+        isAdmin() ||
+        (isAgent() && incoming().agentId == request.auth.uid && incoming().status in ['draft', 'pending']) ||
+        incoming().status == 'approved'
+      );
+
+      allow update: if isValidId(propertyId) && (
+        isAdmin() ||
+        (
+          isAgent() &&
+          resource.data.agentId == request.auth.uid &&
+          incoming().agentId == resource.data.agentId &&
+          (
+            // When currently draft or rejected, agent can edit and optionally resubmit
+            (resource.data.status in ['draft', 'rejected'] && isValidProperty(incoming()) && incoming().status in ['draft', 'pending']) ||
+            // When already approved, agent submits changes for review without touching live approved status
+            (resource.data.status == 'approved' && incoming().status == 'approved' && incoming().hasPendingReview == true)
+          )
+        )
+      );
+
+      allow delete: if isValidId(propertyId) && (
+        isAdmin() ||
+        (isAgent() && resource.data.agentId == request.auth.uid && resource.data.status == 'draft')
+      );
+    }
+
+    // Inquiries collection
+    match /inquiries/{inquiryId} {
+      allow create: if isValidId(inquiryId) && isValidInquiry(incoming());
+      allow get, list, update, delete: if isAdmin();
+    }
+  }
+}

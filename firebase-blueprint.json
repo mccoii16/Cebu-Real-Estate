@@ -1,0 +1,337 @@
+{
+  "entities": {
+    "Property": {
+      "title": "Property",
+      "description": "A luxury real estate property listing in Cebu",
+      "type": "object",
+      "properties": {
+        "propertyId": {
+          "type": "string",
+          "description": "Unique identifier for the property",
+          "maxLength": 128
+        },
+        "buildingId": {
+          "type": "string",
+          "description": "Identifier of the parent building",
+          "maxLength": 128
+        },
+        "buildingName": {
+          "type": "string",
+          "description": "Name of the building or development",
+          "maxLength": 128
+        },
+        "propertyTitle": {
+          "type": "string",
+          "description": "Title of the listing",
+          "maxLength": 150
+        },
+        "location": {
+          "type": "string",
+          "description": "District or township location in Metro Cebu",
+          "maxLength": 100
+        },
+        "address": {
+          "type": "string",
+          "description": "Physical street address",
+          "maxLength": 250
+        },
+        "propertyType": {
+          "type": "string",
+          "description": "Type of property",
+          "enum": ["Condo", "Penthouse", "House & Lot", "Commercial", "Townhouse"]
+        },
+        "listingType": {
+          "type": "string",
+          "description": "Transaction category",
+          "enum": ["sale", "rent"]
+        },
+        "price": {
+          "type": "number",
+          "description": "Price in Philippine Peso (PHP)"
+        },
+        "bedrooms": {
+          "type": "number",
+          "description": "Number of bedrooms"
+        },
+        "bathrooms": {
+          "type": "number",
+          "description": "Number of bathrooms"
+        },
+        "floorArea": {
+          "type": "number",
+          "description": "Floor area in square meters (sqm)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed architectural prose",
+          "maxLength": 3000
+        },
+        "amenities": {
+          "type": "array",
+          "description": "List of amenities and building features"
+        },
+        "images": {
+          "type": "array",
+          "description": "Array of image URLs stored in Firebase Storage or high-res assets"
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether highlighted on homepage"
+        },
+        "status": {
+          "type": "string",
+          "description": "Publication workflow state",
+          "enum": ["draft", "pending", "approved", "rejected"]
+        },
+        "agentId": {
+          "type": "string",
+          "description": "Listing agent identifier",
+          "maxLength": 128
+        },
+        "agentName": {
+          "type": "string",
+          "description": "Listing agent full name",
+          "maxLength": 100
+        },
+        "rejectionReason": {
+          "type": "string",
+          "description": "Explanation if rejected",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        },
+        "approvedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Approval timestamp"
+        },
+        "approvedBy": {
+          "type": "string",
+          "description": "Approver agent or administrator ID",
+          "maxLength": 128
+        },
+        "hasPendingReview": {
+          "type": "boolean",
+          "description": "Whether an approved property has unreviewed pending changes"
+        },
+        "pendingChanges": {
+          "type": "object",
+          "description": "Pending edits awaiting administrator approval"
+        }
+      },
+      "required": [
+        "propertyId",
+        "buildingId",
+        "buildingName",
+        "propertyTitle",
+        "location",
+        "address",
+        "propertyType",
+        "listingType",
+        "price",
+        "bedrooms",
+        "bathrooms",
+        "floorArea",
+        "description",
+        "amenities",
+        "images",
+        "featured",
+        "status"
+      ]
+    },
+    "Building": {
+      "title": "Building",
+      "description": "A prime tower or residential masterplanned development",
+      "type": "object",
+      "properties": {
+        "buildingId": {
+          "type": "string",
+          "description": "Unique building identifier",
+          "maxLength": 128
+        },
+        "buildingName": {
+          "type": "string",
+          "description": "Name of the building",
+          "maxLength": 128
+        },
+        "location": {
+          "type": "string",
+          "description": "Location district in Cebu",
+          "maxLength": 100
+        },
+        "address": {
+          "type": "string",
+          "description": "Street address",
+          "maxLength": 250
+        },
+        "description": {
+          "type": "string",
+          "description": "Architectural and developer summary",
+          "maxLength": 3000
+        },
+        "buildingImages": {
+          "type": "array",
+          "description": "Photographs of the building development"
+        },
+        "amenities": {
+          "type": "array",
+          "description": "Shared building amenities"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": [
+        "buildingId",
+        "buildingName",
+        "location",
+        "address",
+        "description",
+        "buildingImages",
+        "amenities"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "System user account with role-based permissions",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full name of agent or administrator",
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "description": "Role classification",
+          "enum": ["superadmin", "agent"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Account status",
+          "enum": ["active", "disabled", "deleted"]
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Creator user UID or bootstrap identifier",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account update timestamp"
+        }
+      },
+      "required": ["uid", "email", "displayName", "role", "status"]
+    },
+    "Inquiry": {
+      "title": "Inquiry",
+      "description": "Client consultation and viewing request",
+      "type": "object",
+      "properties": {
+        "inquiryId": {
+          "type": "string",
+          "description": "Unique inquiry identifier",
+          "maxLength": 128
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Client full name",
+          "maxLength": 150
+        },
+        "email": {
+          "type": "string",
+          "description": "Client email address",
+          "maxLength": 200
+        },
+        "phone": {
+          "type": "string",
+          "description": "Client contact phone or WhatsApp number",
+          "maxLength": 50
+        },
+        "propertyInterest": {
+          "type": "string",
+          "description": "Property or tower name of interest",
+          "maxLength": 200
+        },
+        "preferredContact": {
+          "type": "string",
+          "description": "Preferred communication channel",
+          "enum": ["email", "phone", "whatsapp"]
+        },
+        "message": {
+          "type": "string",
+          "description": "Inquiry note or viewing schedule request",
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "description": "Lead processing status",
+          "enum": ["new", "contacted", "archived"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Inquiry timestamp"
+        }
+      },
+      "required": ["inquiryId", "fullName", "email", "phone", "propertyInterest", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/properties/{propertyId}": {
+      "schema": {
+        "$ref": "#/entities/Property"
+      },
+      "description": "Real estate listings. Publicly readable if status == 'approved'. Controllable by Super Admin and owning Agents."
+    },
+    "/buildings/{buildingId}": {
+      "schema": {
+        "$ref": "#/entities/Building"
+      },
+      "description": "Towers and developments. Publicly readable. Modifiable only by Super Admin."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Agent and Super Admin user accounts. Managed exclusively by Super Admin."
+    },
+    "/inquiries/{inquiryId}": {
+      "schema": {
+        "$ref": "#/entities/Inquiry"
+      },
+      "description": "Client property inquiries and viewing requests. Creatable publicly, manageable by Super Admin."
+    }
+  }
+}
