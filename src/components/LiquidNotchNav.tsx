@@ -41,29 +41,10 @@ export const LiquidNotchNav: React.FC<LiquidNotchNavProps> = ({
               onClick={() => onTabChange(item.id)}
               className={`relative px-4 sm:px-5 py-2 text-sm font-medium transition-colors duration-200 z-10 flex items-center gap-1.5 outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] rounded-full ${
                 isActive
-                  ? 'text-[#17243B] font-semibold'
-                  : 'text-white/85 hover:text-white'
+                  ? 'text-[#C6A878] font-semibold'
+                  : 'text-white/80 hover:text-white'
               }`}
             >
-              {isActive && (
-                <motion.div
-                  layoutId="liquid-notch-indicator"
-                  className="absolute inset-0 bg-gradient-to-b from-white via-[#FAF9F5] to-[#F4F1EA] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.18)] -z-10"
-                  transition={{
-                    type: 'spring',
-                    stiffness: 450,
-                    damping: 35,
-                    mass: 0.8,
-                  }}
-                >
-                  {/* Top Champagne Illuminated Rim Glow */}
-                  <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 w-20 h-4 bg-[#C6A878] opacity-75 blur-[8px] pointer-events-none rounded-full" />
-                  <div className="absolute top-0 inset-x-2 h-[2px] bg-gradient-to-r from-transparent via-[#C6A878] to-transparent" />
-
-                  {/* Clean rounded pill with top champagne glow - corner triangles removed */}
-                </motion.div>
-              )}
-
               <span className="relative z-10 whitespace-nowrap tracking-wide">
                 {item.label}
               </span>

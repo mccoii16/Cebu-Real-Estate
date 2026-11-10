@@ -190,12 +190,12 @@ export const Header: React.FC<HeaderProps> = ({
                 onClick={() => handleMobileNavClick(tab.id)}
                 className={`text-left px-4 py-3 rounded-xl text-sm font-medium transition-colors flex items-center justify-between ${
                   activeTab === tab.id
-                    ? 'bg-[#F8F7F3] text-[#17243B] font-semibold'
+                    ? 'text-[#C6A878] font-semibold bg-white/5'
                     : 'text-white/80 hover:text-white hover:bg-white/5'
                 }`}
               >
                 <span>{tab.label}</span>
-                {activeTab === tab.id && <span className="w-2 h-2 rounded-full bg-[#C6A878]" />}
+                {activeTab === tab.id && <span className="w-1.5 h-1.5 rounded-full bg-[#C6A878]" />}
               </button>
             ))}
 

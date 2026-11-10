@@ -25,7 +25,7 @@ import {
   applyPropertyFilters,
 } from './services/propertyService';
 import { getAllLocations } from './services/locationService';
-import { getWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from './services/settingsService';
+import { getWebsiteSettings, getCachedWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from './services/settingsService';
 import { testFirestoreConnection } from './services/firebase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
@@ -58,7 +58,7 @@ function MainApp() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
   const [locations, setLocations] = useState<LocationHighlight[]>([]);
-  const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(DEFAULT_WEBSITE_SETTINGS);
+  const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(getCachedWebsiteSettings);
 
   // Favorites state with localStorage
   const [favorites, setFavorites] = useState<string[]>(() => {

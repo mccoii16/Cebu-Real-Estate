@@ -92,13 +92,13 @@ export const Hero: React.FC<HeroProps> = ({ onExploreClick, settings }) => {
         <div className="absolute bottom-0 inset-x-0 h-40 bg-gradient-to-t from-[#17243B] to-transparent z-10" />
 
         {/* Right-aligned Architectural Skyline Photo */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
-            key={currentSlide.id}
-            initial={{ opacity: 0, scale: 1.05 }}
+            key={currentSlide.image || currentSlide.id}
+            initial={{ opacity: 0.85 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
             className="absolute right-0 top-0 bottom-0 w-full lg:w-3/5 h-full"
           >
             <img

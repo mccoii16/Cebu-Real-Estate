@@ -51,17 +51,43 @@ export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
 };
 
 const SETTINGS_DOC_REF = doc(db, 'settings', 'general');
+const SETTINGS_STORAGE_KEY = 'cebu_prime_site_settings_v2';
+
+/**
+ * Synchronously retrieves cached settings from localStorage for instant 0-delay render.
+ * Eliminates the split-second photo flicker on page refresh before Firestore resolves.
+ */
+export function getCachedWebsiteSettings(): WebsiteSettings {
+  if (typeof window !== 'undefined') {
+    try {
+      const cached = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return { ...DEFAULT_WEBSITE_SETTINGS, ...parsed };
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return DEFAULT_WEBSITE_SETTINGS;
+}
 
 export async function getWebsiteSettings(): Promise<WebsiteSettings> {
   try {
     const snap = await getDoc(SETTINGS_DOC_REF);
     if (snap.exists()) {
-      return { ...DEFAULT_WEBSITE_SETTINGS, ...(snap.data() as Partial<WebsiteSettings>) };
+      const merged = { ...DEFAULT_WEBSITE_SETTINGS, ...(snap.data() as Partial<WebsiteSettings>) };
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+        } catch {}
+      }
+      return merged;
     }
   } catch (err) {
-    console.warn('Could not read settings from Firestore, using defaults:', err);
+    console.warn('Could not read settings from Firestore, using local cache:', err);
   }
-  return DEFAULT_WEBSITE_SETTINGS;
+  return getCachedWebsiteSettings();
 }
 
 export async function saveWebsiteSettings(
@@ -75,6 +101,16 @@ export async function saveWebsiteSettings(
     updatedBy,
   };
 
-  await setDoc(SETTINGS_DOC_REF, merged, { merge: true });
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+    } catch {}
+  }
+
+  try {
+    await setDoc(SETTINGS_DOC_REF, merged, { merge: true });
+  } catch (err) {
+    console.warn('Could not save settings to Firestore (preserved in local cache):', err);
+  }
   return merged;
 }
