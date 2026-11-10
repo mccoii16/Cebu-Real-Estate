@@ -16,7 +16,7 @@ import { AuthModal } from './components/auth/AuthModal';
 import { SuperAdminDashboard } from './components/dashboard/SuperAdminDashboard';
 import { AgentDashboard } from './components/dashboard/AgentDashboard';
 import { NavTabId } from './components/LiquidNotchNav';
-import { PropertyDoc, BuildingDoc, PropertyFilter } from './types/property';
+import { PropertyDoc, BuildingDoc, PropertyFilter, LocationHighlight, WebsiteSettings } from './types/property';
 import {
   getApprovedProperties,
   getAllPropertiesForStaff,
@@ -24,6 +24,8 @@ import {
   seedInitialFirestoreData,
   applyPropertyFilters,
 } from './services/propertyService';
+import { getAllLocations } from './services/locationService';
+import { getWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from './services/settingsService';
 import { testFirestoreConnection } from './services/firebase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
@@ -55,6 +57,9 @@ function MainApp() {
   const [favoritesDrawerOpen, setFavoritesDrawerOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
+  const [locations, setLocations] = useState<LocationHighlight[]>([]);
+  const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(DEFAULT_WEBSITE_SETTINGS);
+
   // Favorites state with localStorage
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -80,17 +85,21 @@ function MainApp() {
       await testFirestoreConnection();
       await seedInitialFirestoreData();
 
-      const [fetchedProperties, fetchedBuildings] = await Promise.all([
+      const [fetchedProperties, fetchedBuildings, fetchedLocations, fetchedSettings] = await Promise.all([
         isSuperAdmin
           ? getAllPropertiesForStaff('superadmin', user?.uid)
           : isAgent
           ? getAllPropertiesForStaff('agent', user?.uid)
           : getApprovedProperties(),
         getAllBuildings(),
+        getAllLocations(),
+        getWebsiteSettings(),
       ]);
 
       setProperties(fetchedProperties);
       setBuildings(fetchedBuildings);
+      setLocations(fetchedLocations);
+      setSiteSettings(fetchedSettings);
     } catch (err) {
       console.error('Error fetching Firestore properties:', err);
     } finally {
@@ -115,8 +124,6 @@ function MainApp() {
     setActiveTab(tab);
     if (tab === 'home') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } else if (tab === 'properties') {
-      setAllPropertiesViewOpen(true);
     } else {
       const el = document.getElementById(tab);
       if (el) {
@@ -193,10 +200,14 @@ function MainApp() {
         <SuperAdminDashboard
           properties={properties}
           buildings={buildings}
+          locations={locations}
+          siteSettings={siteSettings}
           onPropertyUpdated={handlePropertyUpdated}
           onPropertyDeleted={handlePropertyDeleted}
           onBuildingAdded={handleBuildingAdded}
           onBuildingDeleted={handleBuildingDeleted}
+          onLocationsUpdated={setLocations}
+          onSettingsUpdated={setSiteSettings}
           onViewPublicSite={() => setCurrentView('public')}
           onSelectPropertyPreview={setSelectedProperty}
         />
@@ -268,6 +279,7 @@ function MainApp() {
             const el = document.getElementById('properties');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
           }}
+          settings={siteSettings}
         />
       </div>
 
@@ -292,6 +304,7 @@ function MainApp() {
 
         {/* Explore Top Locations Section */}
         <ExploreLocations
+          locations={locations}
           onSelectLocation={handleLocationSelect}
           onBrowseAllLocations={() => {
             setFilter(DEFAULT_FILTER);

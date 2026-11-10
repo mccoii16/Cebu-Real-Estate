@@ -149,5 +149,17 @@ service cloud.firestore {
       allow create: if isValidId(inquiryId) && isValidInquiry(incoming());
       allow get, list, update, delete: if isAdmin();
     }
+
+    // Locations collection
+    match /locations/{locationId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Website settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
   }
 }

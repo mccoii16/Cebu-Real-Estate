@@ -14,12 +14,17 @@ import {
   Upload,
   Loader2,
   Image as ImageIcon,
+  Maximize,
+  Minimize,
+  Trash2,
 } from 'lucide-react';
 import { PropertyDoc } from '../types/property';
 import { formatPHP } from '../utils/filterProperties';
 import { uploadPropertyPhoto } from '../services/storageService';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { useAuth } from '../context/AuthContext';
+import { canManagePropertyPhotos } from '../utils/filterProperties';
 
 interface PropertyModalProps {
   property: PropertyDoc | null;
@@ -38,12 +43,19 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   onInquireAboutProperty,
   onPropertyUpdated,
 }) => {
+  const { user, isSuperAdmin } = useAuth();
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeletingPhoto, setIsDeletingPhoto] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!property) return null;
+
+  // Role Gate: strictly master authority (isSuperAdmin) or the agent who created this listing
+  const canManagePhotos = canManagePropertyPhotos(user?.uid, isSuperAdmin, property);
+
 
   const images = property.images && property.images.length > 0
     ? property.images
@@ -57,6 +69,41 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
 
   const prevImage = () => {
     setActiveImageIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+  };
+
+  const handleDeletePhoto = async (indexToDelete: number) => {
+    if (!canManagePhotos) return;
+    if (images.length <= 1) {
+      alert('A property must have at least one photograph.');
+      return;
+    }
+    if (!window.confirm('Are you sure you want to delete this photo from the property gallery?')) return;
+
+    setIsDeletingPhoto(true);
+    try {
+      const newImages = images.filter((_, idx) => idx !== indexToDelete);
+      const propertyRef = doc(db, 'properties', property.propertyId);
+      await updateDoc(propertyRef, {
+        images: newImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const updatedProperty: PropertyDoc = {
+        ...property,
+        images: newImages,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (onPropertyUpdated) {
+        onPropertyUpdated(updatedProperty);
+      }
+      setActiveImageIndex(Math.max(0, indexToDelete - 1));
+    } catch (err: any) {
+      console.error('Error deleting photo:', err);
+      alert('Failed to delete photo: ' + (err.message || 'Permission denied'));
+    } finally {
+      setIsDeletingPhoto(false);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,35 +157,48 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="property-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto"
-      onClick={onClose}
-    >
+    <>
       <div
-        className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-6 flex flex-col"
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="property-modal-title"
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 bg-black/80 backdrop-blur-sm overflow-y-auto"
+        onClick={onClose}
       >
-        {/* Header Media Banner with Multi-Image Gallery */}
-        <div className="relative w-full h-72 sm:h-96 bg-slate-950 overflow-hidden group">
-          <img
-            src={currentImage}
-            alt={property.propertyTitle}
-            className="w-full h-full object-cover object-center transition-all duration-300"
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
+        <div
+          className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-auto sm:my-10 max-h-[90vh] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header Media Banner with Multi-Image Gallery */}
+          <div className="relative w-full h-72 sm:h-96 bg-slate-950 overflow-hidden group flex-shrink-0">
+            <img
+              src={currentImage}
+              alt={property.propertyTitle}
+              className="w-full h-full object-cover object-center transition-all duration-300"
+              referrerPolicy="no-referrer"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
 
-          {/* Close Button */}
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
-          >
-            <X className="w-5 h-5" />
-          </button>
+            {/* Top Right Action Cluster: Fullscreen & Close */}
+            <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(true)}
+                title="View Fullscreen"
+                aria-label="View photo fullscreen"
+                className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors focus:outline-none"
+              >
+                <Maximize className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={onClose}
+                aria-label="Close modal"
+                className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors focus:outline-none"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
           {/* Gallery Navigation Arrows */}
           {images.length > 1 && (
@@ -298,53 +358,77 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </div>
           )}
 
-          {/* Firebase Storage Image Upload Feature */}
-          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                  <Upload className="w-3.5 h-3.5 text-[#C6A878]" />
-                  <span>Upload Property Photographs</span>
+          {/* Firebase Storage Image Upload & Management (Restricted to Master Authority or Listing Agent) */}
+          {canManagePhotos ? (
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5 text-[#C6A878]" />
+                    <span>Manage Property Photographs</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {isSuperAdmin
+                      ? 'Master Authority: You have full access to add and delete photos on this property.'
+                      : 'Listing Agent: You can add and manage photos for your assigned listing.'}
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Directly upload high-resolution property photography to Firebase Storage.
-                </p>
-              </div>
 
-              <div>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileUpload}
-                  accept="image/*"
-                  className="hidden"
-                  id={`upload-photo-${property.propertyId}`}
-                />
-                <button
-                  type="button"
-                  disabled={isUploading}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-4 py-2 rounded-full border border-[#17243B] text-[#17243B] hover:bg-[#17243B] hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
-                >
-                  {isUploading ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Uploading to Storage...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload Photo</span>
-                    </>
+                <div className="flex items-center gap-2">
+                  {images.length > 1 && (
+                    <button
+                      type="button"
+                      disabled={isDeletingPhoto}
+                      onClick={() => handleDeletePhoto(activeImageIndex)}
+                      className="px-3.5 py-2 rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      title="Delete currently displayed photo"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>{isDeletingPhoto ? 'Deleting...' : 'Delete Active Photo'}</span>
+                    </button>
                   )}
-                </button>
-              </div>
-            </div>
 
-            {uploadError && (
-              <p className="text-xs text-rose-500 mt-2 font-medium">{uploadError}</p>
-            )}
-          </div>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                    accept="image/*"
+                    className="hidden"
+                    id={`upload-photo-${property.propertyId}`}
+                  />
+                  <button
+                    type="button"
+                    disabled={isUploading}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-4 py-2 rounded-full border border-[#17243B] text-[#17243B] hover:bg-[#17243B] hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {isUploading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Uploading to Storage...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Add Photo</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {uploadError && (
+                <p className="text-xs text-rose-500 mt-2 font-medium">{uploadError}</p>
+              )}
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 text-xs flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-slate-400" />
+              <span>
+                Photo management for this listing is restricted to {property.agentName || 'the assigned listing agent'} and the Master Administrator.
+              </span>
+            </div>
+          )}
 
           {/* Actions Footer */}
           <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -374,5 +458,106 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         </div>
       </div>
     </div>
-  );
+
+    {/* FULLSCREEN LIGHTBOX VIEWER */}
+    {isFullscreen && (
+      <div
+        className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex flex-col items-center justify-between p-4 sm:p-6 select-none animate-in fade-in duration-200"
+        onClick={() => setIsFullscreen(false)}
+      >
+        {/* Top Controls */}
+        <div className="w-full flex items-center justify-between text-white z-20 px-2 sm:px-6 py-2">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-sm sm:text-base text-white font-serif">{property.propertyTitle}</span>
+            <span className="text-xs text-white/60 font-mono">
+              ({activeImageIndex + 1} of {images.length})
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsFullscreen(false);
+              }}
+              aria-label="Exit fullscreen"
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              <Minimize className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsFullscreen(false);
+              }}
+              aria-label="Close"
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Center Main High-Res Image Display with Left/Right Arrows */}
+        <div
+          className="relative flex-1 w-full max-w-6xl flex items-center justify-center overflow-hidden my-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <img
+            src={currentImage}
+            alt={property.propertyTitle}
+            className="max-h-[82vh] max-w-full object-contain rounded-2xl shadow-2xl transition-transform duration-300"
+            referrerPolicy="no-referrer"
+          />
+
+          {images.length > 1 && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  prevImage();
+                }}
+                aria-label="Previous photo"
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all z-20 focus:outline-none"
+              >
+                <ChevronLeft className="w-7 h-7" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  nextImage();
+                }}
+                aria-label="Next photo"
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all z-20 focus:outline-none"
+              >
+                <ChevronRight className="w-7 h-7" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Bottom Fullscreen Thumbnails Strip */}
+        {images.length > 1 && (
+          <div
+            className="flex items-center gap-2 overflow-x-auto max-w-4xl py-2 px-4 bg-black/40 rounded-2xl backdrop-blur-sm z-20"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {images.map((img, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveImageIndex(i)}
+                className={`relative w-16 h-12 rounded-lg overflow-hidden flex-shrink-0 border-2 transition-all ${
+                  activeImageIndex === i ? 'border-[#C6A878] scale-105' : 'border-transparent opacity-50 hover:opacity-100'
+                }`}
+              >
+                <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+  </>
+);
 };

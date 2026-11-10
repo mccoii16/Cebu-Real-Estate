@@ -7,6 +7,7 @@ import {
   canAgentEditProperty,
   applyApprovalDecision,
   calculateAgentMetrics,
+  canManagePropertyPhotos,
 } from './filterProperties';
 import { PropertyDoc } from '../types/property';
 
@@ -181,3 +182,35 @@ test('calculateAgentMetrics computes accurate totals across statuses', () => {
   assert.equal(metrics.pendingCount, 0);
   assert.equal(metrics.rejectedCount, 0);
 });
+
+test('canManagePropertyPhotos allows only Master Admin or listing owner agent', () => {
+  const propertyOwnedByAgent1 = sampleProperties[0]; // agentId: 'agent-1'
+
+  // Master Authority (Super Admin) can always manage photos
+  assert.equal(canManagePropertyPhotos('superadmin-id', true, propertyOwnedByAgent1), true);
+  assert.equal(canManagePropertyPhotos('other-id', true, propertyOwnedByAgent1), true);
+
+  // The agent who created/uploaded this property can manage photos
+  assert.equal(canManagePropertyPhotos('agent-1', false, propertyOwnedByAgent1), true);
+
+  // Other agents CANNOT manage or delete photos
+  assert.equal(canManagePropertyPhotos('agent-2-intruder', false, propertyOwnedByAgent1), false);
+  assert.equal(canManagePropertyPhotos('agent-3', false, propertyOwnedByAgent1), false);
+
+  // Unauthenticated guests CANNOT manage photos
+  assert.equal(canManagePropertyPhotos(undefined, false, propertyOwnedByAgent1), false);
+});
+
+test('filterProperties matches dynamic and custom locations', () => {
+  const cbpProps = filterProperties(sampleProperties, { location: 'Cebu Business Park' });
+  assert.equal(cbpProps.length, 1);
+  assert.equal(cbpProps[0].propertyTitle, 'The Alcoves Unit 18B');
+
+  const itParkProps = filterProperties(sampleProperties, { location: 'Cebu IT Park' });
+  assert.equal(itParkProps.length, 1);
+  assert.equal(itParkProps[0].propertyTitle, '38 Park Avenue Suite 24A');
+
+  const emptyProps = filterProperties(sampleProperties, { location: 'NonExistentArea' });
+  assert.equal(emptyProps.length, 0);
+});
+

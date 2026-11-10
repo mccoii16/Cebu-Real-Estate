@@ -1,17 +1,21 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
 import { LOCATIONS_DATA } from '../data/locations';
-import { PropertyLocation } from '../types/property';
+import { LocationHighlight } from '../types/property';
 
 interface ExploreLocationsProps {
   onSelectLocation: (location: string) => void;
   onBrowseAllLocations: () => void;
+  locations?: LocationHighlight[];
 }
 
 export const ExploreLocations: React.FC<ExploreLocationsProps> = ({
   onSelectLocation,
   onBrowseAllLocations,
+  locations,
 }) => {
+  const displayLocations = locations && locations.length > 0 ? locations.slice(0, 4) : LOCATIONS_DATA;
+
   return (
     <section id="locations" className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-10 sm:py-16">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
@@ -36,18 +40,32 @@ export const ExploreLocations: React.FC<ExploreLocationsProps> = ({
 
         {/* Right 4 Location Cards */}
         <div className="lg:col-span-9 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {LOCATIONS_DATA.map((location) => (
+          {displayLocations.map((location) => (
             <div
               key={location.id}
               onClick={() => onSelectLocation(location.name)}
               className="group relative rounded-2xl overflow-hidden shadow-[0_4px_16px_rgba(0,0,0,0.06)] hover:shadow-[0_12px_28px_rgba(23,36,59,0.18)] hover:-translate-y-1 transition-all duration-300 cursor-pointer aspect-[270/145]"
             >
               <img
-                src={location.image}
+                src={location.image || '/assets/extracted/photo_the_alcoves.png'}
                 alt={location.name}
-                className="w-full h-full object-cover rounded-2xl"
+                className="w-full h-full object-cover rounded-2xl group-hover:scale-105 transition-transform duration-500"
                 referrerPolicy="no-referrer"
               />
+              {/* Bottom gradient and title tag for clear readability */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent flex items-end p-3 pointer-events-none">
+                <div className="w-full flex items-center justify-between text-white">
+                  <div className="overflow-hidden pr-1">
+                    <span className="block text-xs font-bold leading-tight truncate drop-shadow-sm">{location.name}</span>
+                    {location.tagline && (
+                      <span className="block text-[10px] text-[#C6A878] font-medium truncate drop-shadow-sm">{location.tagline}</span>
+                    )}
+                  </div>
+                  <div className="w-6 h-6 rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center flex-shrink-0 group-hover:bg-[#C6A878] group-hover:text-[#17243B] transition-colors">
+                    <ArrowRight className="w-3 h-3 text-white group-hover:text-[#17243B]" />
+                  </div>
+                </div>
+              </div>
               {/* Subtle hover gleam */}
               <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>

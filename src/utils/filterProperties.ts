@@ -186,3 +186,13 @@ export function calculateAgentMetrics(properties: PropertyDoc[]) {
     rejectedCount,
   };
 }
+
+export function canManagePropertyPhotos(
+  userId: string | undefined,
+  isSuperAdmin: boolean,
+  property: PropertyDoc
+): boolean {
+  if (isSuperAdmin) return true;
+  return Boolean(userId && property.agentId && userId === property.agentId);
+}
+

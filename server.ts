@@ -24,7 +24,9 @@ if (!getApps().length) {
 }
 
 const adminAuth = getAuth();
-const adminDb = getFirestore();
+// Connect to the specific database configured in firebase-applet-config.json
+const FIRESTORE_DATABASE_ID = 'ai-studio-cebuprimepropert-cc92c71f-1cf1-4346-af2d-433e14c61d77';
+const adminDb = getFirestore(FIRESTORE_DATABASE_ID);
 adminDb.settings({ ignoreUndefinedProperties: true });
 
 const app = express();

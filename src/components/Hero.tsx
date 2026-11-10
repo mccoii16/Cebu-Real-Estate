@@ -42,30 +42,46 @@ const HERO_SLIDES: HeroSlide[] = [
   },
 ];
 
+import { WebsiteSettings } from '../types/property';
+
 interface HeroProps {
   onExploreClick: () => void;
+  settings?: WebsiteSettings;
 }
 
-export const Hero: React.FC<HeroProps> = ({ onExploreClick }) => {
+export const Hero: React.FC<HeroProps> = ({ onExploreClick, settings }) => {
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
 
+  const activeSlides: HeroSlide[] =
+    settings?.heroSlides && settings.heroSlides.length > 0
+      ? settings.heroSlides.map((s, idx) => ({
+          id: s.id || idx + 1,
+          label: s.label || `0${idx + 1}`,
+          location: s.location || 'Cebu Prime District',
+          image: s.image,
+          headlineLine1: s.headlineLine1 || 'Find Your Perfect',
+          headlineLine2: s.headlineLine2 || 'Property in Cebu',
+          subheading: s.subheading || 'Modern living. Prime locations. Endless possibilities.',
+        }))
+      : HERO_SLIDES;
+
   const prevSlide = () => {
-    setCurrentSlideIndex((prev) => (prev === 0 ? HERO_SLIDES.length - 1 : prev - 1));
+    setCurrentSlideIndex((prev) => (prev === 0 ? activeSlides.length - 1 : prev - 1));
   };
 
   const nextSlide = () => {
-    setCurrentSlideIndex((prev) => (prev === HERO_SLIDES.length - 1 ? 0 : prev + 1));
+    setCurrentSlideIndex((prev) => (prev === activeSlides.length - 1 ? 0 : prev + 1));
   };
 
   // Subtle auto-advance every 8 seconds
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentSlideIndex((prev) => (prev === HERO_SLIDES.length - 1 ? 0 : prev + 1));
+      setCurrentSlideIndex((prev) => (prev === activeSlides.length - 1 ? 0 : prev + 1));
     }, 8000);
     return () => clearInterval(timer);
-  }, []);
+  }, [activeSlides.length]);
 
-  const currentSlide = HERO_SLIDES[currentSlideIndex];
+  const currentSlide = activeSlides[currentSlideIndex] || activeSlides[0];
 
   return (
     <section className="relative w-full bg-[#17243B] min-h-[580px] lg:min-h-[640px] pt-4 pb-28 sm:pb-32 overflow-hidden flex flex-col justify-between">
@@ -175,7 +191,9 @@ export const Hero: React.FC<HeroProps> = ({ onExploreClick }) => {
             />
           </div>
 
-          <span className="font-mono tabular-nums text-white/50">03</span>
+          <span className="font-mono tabular-nums text-white/50">
+            {activeSlides.length < 10 ? `0${activeSlides.length}` : activeSlides.length}
+          </span>
 
           {/* Circular Previous / Next Arrows */}
           <div className="flex items-center gap-2 ml-2">

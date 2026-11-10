@@ -13,8 +13,41 @@ export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
   officeAddress: 'Cebu Business Park, Archbishop Reyes Ave, Cebu City 6000',
   facebookUrl: 'https://facebook.com',
   instagramUrl: 'https://instagram.com',
-  linkedinUrl: 'https://linkedin.com',
-  heroImages: ['/assets/extracted/hero_skyline.png'],
+  heroImages: [
+    '/assets/extracted/hero_skyline_clean.png',
+    '/assets/extracted/photo_park_avenue.png',
+    '/assets/extracted/loc_mactan.png',
+  ],
+  heroSlides: [
+    {
+      id: 1,
+      label: '01',
+      location: 'Cebu City & Coastal Skyline',
+      image: '/assets/extracted/hero_skyline_clean.png',
+      headlineLine1: 'Find Your Perfect',
+      headlineLine2: 'Property in Cebu',
+      subheading: 'Modern living. Prime locations. Endless possibilities.',
+    },
+    {
+      id: 2,
+      label: '02',
+      location: 'Cebu Business Park & IT Park',
+      image: '/assets/extracted/photo_park_avenue.png',
+      headlineLine1: 'Elevated High-Rise',
+      headlineLine2: 'Living in the Metro',
+      subheading: 'World-class amenities connected to Cebu’s top business centers.',
+    },
+    {
+      id: 3,
+      label: '03',
+      location: 'Mactan Coastal Township',
+      image: '/assets/extracted/loc_mactan.png',
+      headlineLine1: 'Resort Living by',
+      headlineLine2: 'The Turquoise Coast',
+      subheading: 'Island tranquility just moments from the international gateway.',
+    },
+  ],
+  aboutImage: '/assets/extracted/photo_the_alcoves.png',
 };
 
 const SETTINGS_DOC_REF = doc(db, 'settings', 'general');

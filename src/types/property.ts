@@ -119,6 +119,16 @@ export interface InquiryDoc extends InquiryFormData {
   createdAt: string;
 }
 
+export interface HeroSlideConfig {
+  id: number;
+  label: string;
+  location: string;
+  image: string;
+  headlineLine1: string;
+  headlineLine2: string;
+  subheading: string;
+}
+
 export interface WebsiteSettings {
   siteName: string;
   logoSubtitle: string;
@@ -132,6 +142,9 @@ export interface WebsiteSettings {
   instagramUrl?: string;
   linkedinUrl?: string;
   heroImages?: string[];
+  heroSlides?: HeroSlideConfig[];
+  aboutImage?: string;
   updatedAt?: string;
   updatedBy?: string;
 }
+

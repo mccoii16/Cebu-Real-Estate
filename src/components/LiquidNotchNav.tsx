@@ -1,18 +1,16 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { ChevronDown } from 'lucide-react';
 
 export type NavTabId = 'home' | 'properties' | 'about' | 'locations' | 'contact';
 
 interface NavItem {
   id: NavTabId;
   label: string;
-  hasDropdown?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home' },
-  { id: 'properties', label: 'Properties', hasDropdown: true },
+  { id: 'properties', label: 'Properties' },
   { id: 'about', label: 'About' },
   { id: 'locations', label: 'Locations' },
   { id: 'contact', label: 'Contact' },
@@ -69,14 +67,6 @@ export const LiquidNotchNav: React.FC<LiquidNotchNavProps> = ({
               <span className="relative z-10 whitespace-nowrap tracking-wide">
                 {item.label}
               </span>
-
-              {item.hasDropdown && (
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform duration-200 relative z-10 ${
-                    isActive ? 'text-[#17243B] rotate-0' : 'text-white/70'
-                  }`}
-                />
-              )}
             </button>
           );
         })}

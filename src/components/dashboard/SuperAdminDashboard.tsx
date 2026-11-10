@@ -37,20 +37,33 @@ import {
   Phone,
   Layers,
 } from 'lucide-react';
-import { PropertyDoc, BuildingDoc, UserProfile, InquiryDoc, WebsiteSettings } from '../../types/property';
+import {
+  PropertyDoc,
+  BuildingDoc,
+  UserProfile,
+  InquiryDoc,
+  WebsiteSettings,
+  LocationHighlight,
+  HeroSlideConfig,
+} from '../../types/property';
 import { useAuth } from '../../context/AuthContext';
 import { AddPropertyModal } from './AddPropertyModal';
 import { doc, updateDoc, deleteDoc, addDoc, collection, setDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { getWebsiteSettings, saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from '../../services/settingsService';
+import { getAllLocations, saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
   buildings: BuildingDoc[];
+  locations?: LocationHighlight[];
+  siteSettings?: WebsiteSettings;
   onPropertyUpdated: (property: PropertyDoc) => void;
   onPropertyDeleted: (propertyId: string) => void;
   onBuildingAdded: (building: BuildingDoc) => void;
   onBuildingDeleted: (buildingId: string) => void;
+  onLocationsUpdated?: (locations: LocationHighlight[]) => void;
+  onSettingsUpdated?: (settings: WebsiteSettings) => void;
   onViewPublicSite: () => void;
   onSelectPropertyPreview: (property: PropertyDoc) => void;
 }
@@ -68,15 +81,37 @@ export type AdminSection =
 export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   properties,
   buildings,
+  locations,
+  siteSettings: initialSettings,
   onPropertyUpdated,
   onPropertyDeleted,
   onBuildingAdded,
   onBuildingDeleted,
+  onLocationsUpdated,
+  onSettingsUpdated,
   onViewPublicSite,
   onSelectPropertyPreview,
 }) => {
   const { user, profile, signOut } = useAuth();
   const [activeSection, setActiveSection] = useState<AdminSection>('overview');
+
+  // Locations Management State
+  const [locationsList, setLocationsList] = useState<LocationHighlight[]>(
+    locations && locations.length > 0 ? locations : INITIAL_LOCATIONS
+  );
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+  const [editingLocation, setEditingLocation] = useState<LocationHighlight | null>(null);
+  const [locName, setLocName] = useState('');
+  const [locTagline, setLocTagline] = useState('');
+  const [locDescription, setLocDescription] = useState('');
+  const [locImage, setLocImage] = useState('');
+  const [isSavingLoc, setIsSavingLoc] = useState(false);
+
+  useEffect(() => {
+    if (locations && locations.length > 0) {
+      setLocationsList(locations);
+    }
+  }, [locations]);
 
   // Agent State
   const [agents, setAgents] = useState<UserProfile[]>([]);
@@ -203,6 +238,70 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
+  // Location Handlers
+  const openAddLocationModal = () => {
+    setEditingLocation(null);
+    setLocName('');
+    setLocTagline('');
+    setLocDescription('');
+    setLocImage('/assets/extracted/photo_the_alcoves.png');
+    setIsLocationModalOpen(true);
+  };
+
+  const openEditLocationModal = (loc: LocationHighlight) => {
+    setEditingLocation(loc);
+    setLocName(loc.name);
+    setLocTagline(loc.tagline);
+    setLocDescription(loc.description);
+    setLocImage(loc.image);
+    setIsLocationModalOpen(true);
+  };
+
+  const handleSaveLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!locName.trim()) {
+      alert('District name is required');
+      return;
+    }
+    setIsSavingLoc(true);
+    try {
+      const id = editingLocation ? editingLocation.id : `loc-${Date.now()}`;
+      const locData: LocationHighlight = {
+        id,
+        name: locName.trim(),
+        tagline: locTagline.trim() || 'Premier Real Estate Zone',
+        description: locDescription.trim() || 'Desirable neighborhood with top residential developments.',
+        image: locImage.trim() || '/assets/extracted/photo_the_alcoves.png',
+        propertyCount: properties.filter((p) => p.location.toLowerCase() === locName.trim().toLowerCase()).length,
+      };
+
+      await saveLocation(locData);
+      const updatedList = editingLocation
+        ? locationsList.map((item) => (item.id === id ? locData : item))
+        : [...locationsList, locData];
+
+      setLocationsList(updatedList);
+      if (onLocationsUpdated) onLocationsUpdated(updatedList);
+      setIsLocationModalOpen(false);
+    } catch (err: any) {
+      alert(`Failed to save location: ${err.message}`);
+    } finally {
+      setIsSavingLoc(false);
+    }
+  };
+
+  const handleDeleteLocation = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete district "${name}"?`)) return;
+    try {
+      await deleteLocation(id);
+      const updated = locationsList.filter((l) => l.id !== id);
+      setLocationsList(updated);
+      if (onLocationsUpdated) onLocationsUpdated(updated);
+    } catch (err: any) {
+      alert(`Failed to delete location: ${err.message}`);
+    }
+  };
+
   // Save Website Settings
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,6 +311,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       const adminEmail = user?.email || 'Martiligando@gmail.com';
       const updated = await saveWebsiteSettings(siteSettings, adminEmail);
       setSiteSettings(updated);
+      if (onSettingsUpdated) onSettingsUpdated(updated);
       setSettingsSaveSuccess(true);
       setTimeout(() => setSettingsSaveSuccess(false), 4000);
     } catch (err: any) {
@@ -1413,75 +1513,40 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     Cebu Prime Districts & Locations
                   </h2>
                   <p className="text-xs text-slate-500 mt-1">
-                    Manage top real estate zones, view inventory density per district, and inspect building developments in each area.
+                    Add, edit, or delete designated real estate zones. Changes reflect across search filters and the public showcase.
                   </p>
                 </div>
-                <div className="px-3.5 py-1.5 rounded-full bg-slate-100 text-[#17243B] text-xs font-bold">
-                  8 Designated Zones
+                <div className="flex items-center gap-3">
+                  <span className="px-3.5 py-1.5 rounded-full bg-slate-100 text-[#17243B] text-xs font-bold">
+                    {locationsList.length} Active Districts
+                  </span>
+                  <button
+                    onClick={openAddLocationModal}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add New District</span>
+                  </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                  {
-                    name: 'Cebu Business Park',
-                    tagline: 'Premier Financial District',
-                    img: '/assets/extracted/photo_the_alcoves.png',
-                    desc: 'Cebu’s premier corporate and lifestyle hub hosting top residential condominiums and Ayala Center Cebu.',
-                  },
-                  {
-                    name: 'Cebu IT Park',
-                    tagline: 'Tech & Lifestyle Metropolis',
-                    img: '/assets/extracted/photo_park_avenue.png',
-                    desc: 'The 24/7 vibrant tech district featuring 38 Park Avenue and high-energy dining corridors.',
-                  },
-                  {
-                    name: 'Mactan Newtown',
-                    tagline: 'Coastal Township & Gateway',
-                    img: '/assets/extracted/loc_mactan.png',
-                    desc: 'Masterplanned township connecting international resort living with airport convenience.',
-                  },
-                  {
-                    name: 'Banilad',
-                    tagline: 'Upscale Residential Corridor',
-                    img: '/assets/extracted/loc_banilad.png',
-                    desc: 'Exclusive leafy residential enclaves, private academies, and prestigious golf clubs.',
-                  },
-                  {
-                    name: 'Lahug',
-                    tagline: 'Highland Panoramas & Marco Polo',
-                    img: '/assets/extracted/hero_skyline_clean.png',
-                    desc: 'Elevated scenic hillside developments enjoying mountain breezes and skyline panoramas.',
-                  },
-                  {
-                    name: 'SRP',
-                    tagline: 'South Road Properties Coastal',
-                    img: '/assets/extracted/the_alcoves.png',
-                    desc: 'Cebu’s newest waterfront reclamation city with world-class arenas and retail avenues.',
-                  },
-                  {
-                    name: 'Mandaue',
-                    tagline: 'Industrial & Urban Gateway',
-                    img: '/assets/extracted/astra_centre.png',
-                    desc: 'Strategic commercial junction connecting mainland Cebu with Mactan island bridges.',
-                  },
-                  {
-                    name: 'Lapu-Lapu City',
-                    tagline: 'Island Resort & Waterfront',
-                    img: '/assets/extracted/mactan_newtown.png',
-                    desc: 'Sun-drenched beaches, 5-star seaside hotels, and serene island living.',
-                  },
-                ].map((loc) => {
-                  const locProps = properties.filter((p) => p.location === loc.name);
-                  const locBuildings = buildings.filter((b) => b.location === loc.name);
+                {locationsList.map((loc) => {
+                  const locProps = properties.filter((p) => p.location.toLowerCase() === loc.name.toLowerCase());
+                  const locBuildings = buildings.filter((b) => b.location.toLowerCase() === loc.name.toLowerCase());
                   return (
                     <div
-                      key={loc.name}
-                      className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between"
+                      key={loc.id}
+                      className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between group hover:shadow-md transition-shadow"
                     >
                       <div className="aspect-[16/10] bg-slate-100 relative">
-                        <img src={loc.img} alt={loc.name} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-[#17243B]/80 via-transparent to-transparent" />
+                        <img
+                          src={loc.image || '/assets/extracted/photo_the_alcoves.png'}
+                          alt={loc.name}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#17243B]/85 via-black/20 to-transparent" />
                         <div className="absolute bottom-2.5 left-3 right-3 text-white">
                           <h4 className="font-bold text-sm leading-tight">{loc.name}</h4>
                           <span className="text-[10px] text-[#C6A878] font-medium">{loc.tagline}</span>
@@ -1489,10 +1554,30 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       </div>
 
                       <div className="p-4 flex-1 flex flex-col justify-between">
-                        <p className="text-xs text-slate-600 line-clamp-2 mb-3">{loc.desc}</p>
-                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                          <span className="font-bold text-[#17243B]">{locProps.length} Properties</span>
-                          <span className="text-slate-400 font-medium">{locBuildings.length} Developments</span>
+                        <p className="text-xs text-slate-600 line-clamp-2 mb-3">{loc.description}</p>
+                        
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                          <div className="flex flex-col text-[11px]">
+                            <span className="font-bold text-[#17243B]">{locProps.length} Properties</span>
+                            <span className="text-slate-400">{locBuildings.length} Developments</span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => openEditLocationModal(loc)}
+                              title="Edit District"
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100 transition-colors"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteLocation(loc.id, loc.name)}
+                              title="Delete District"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1709,6 +1794,195 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
                       />
                     </div>
+                  </div>
+                </div>
+
+                {/* Landing Page Photographs & Hero Showcase Carousel */}
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                    <div>
+                      <h3 className="font-bold text-sm text-[#17243B] flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-[#C6A878]" />
+                        <span>Landing Page Media & Hero Showcase Slides</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Master Authority controls for homepage carousel slides, high-resolution imagery, and architectural highlights.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newSlide: HeroSlideConfig = {
+                          id: Date.now(),
+                          label: `0${(siteSettings.heroSlides?.length || 0) + 1}`,
+                          location: 'Cebu Business Park',
+                          image: '/assets/extracted/hero_skyline_clean.png',
+                          headlineLine1: 'Luxury Redefined',
+                          headlineLine2: 'In Cebu Metro',
+                          subheading: 'Premium residences in premier locations.',
+                        };
+                        setSiteSettings({
+                          ...siteSettings,
+                          heroSlides: [...(siteSettings.heroSlides || []), newSlide],
+                        });
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-[#17243B] hover:text-[#C6A878] text-slate-700 font-semibold text-xs transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Carousel Slide</span>
+                    </button>
+                  </div>
+
+                  {/* Slides List */}
+                  <div className="space-y-4">
+                    {(siteSettings.heroSlides || []).map((slide, sIdx) => (
+                      <div
+                        key={slide.id || sIdx}
+                        className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-3"
+                      >
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+                          <span className="font-bold text-xs text-[#17243B] flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-[#17243B] text-white text-[10px] flex items-center justify-center font-mono">
+                              {sIdx + 1}
+                            </span>
+                            Slide #{sIdx + 1}: {slide.location || 'Highlight'}
+                          </span>
+
+                          {(siteSettings.heroSlides?.length || 0) > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const filtered = (siteSettings.heroSlides || []).filter((_, i) => i !== sIdx);
+                                setSiteSettings({ ...siteSettings, heroSlides: filtered });
+                              }}
+                              className="text-slate-400 hover:text-rose-600 text-xs flex items-center gap-1 font-semibold"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove Slide</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                          {/* Image preview & URL */}
+                          <div className="md:col-span-5 space-y-2">
+                            <div className="aspect-[16/9] rounded-lg overflow-hidden border border-slate-300 bg-slate-200 relative">
+                              <img
+                                src={slide.image}
+                                alt="Slide Preview"
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                                Photo Image URL
+                              </label>
+                              <input
+                                type="text"
+                                value={slide.image}
+                                onChange={(e) => {
+                                  const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                  updatedSlides[sIdx] = { ...slide, image: e.target.value };
+                                  setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono"
+                                required
+                              />
+                            </div>
+
+                            {/* Quick Select Buttons */}
+                            <div className="pt-1">
+                              <span className="text-[10px] text-slate-500 block mb-1 font-medium">Quick Pick Preset Assets:</span>
+                              <div className="flex flex-wrap gap-1 text-[10px]">
+                                {[
+                                  { label: 'Skyline Clean', url: '/assets/extracted/hero_skyline_clean.png' },
+                                  { label: 'Park Avenue', url: '/assets/extracted/photo_park_avenue.png' },
+                                  { label: 'Mactan Township', url: '/assets/extracted/loc_mactan.png' },
+                                  { label: 'The Alcoves', url: '/assets/extracted/photo_the_alcoves.png' },
+                                  { label: 'Astra Centre', url: '/assets/extracted/astra_centre.png' },
+                                ].map((preset) => (
+                                  <button
+                                    key={preset.label}
+                                    type="button"
+                                    onClick={() => {
+                                      const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                      updatedSlides[sIdx] = { ...slide, image: preset.url };
+                                      setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-700 hover:border-[#C6A878] hover:text-[#17243B] transition-colors"
+                                  >
+                                    {preset.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Slide Copy */}
+                          <div className="md:col-span-7 space-y-2 text-xs">
+                            <div>
+                              <label className="block font-semibold text-slate-700 mb-1">District / Location Tag</label>
+                              <input
+                                type="text"
+                                value={slide.location}
+                                onChange={(e) => {
+                                  const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                  updatedSlides[sIdx] = { ...slide, location: e.target.value };
+                                  setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                }}
+                                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="block font-semibold text-slate-700 mb-1">Headline Line 1</label>
+                                <input
+                                  type="text"
+                                  value={slide.headlineLine1}
+                                  onChange={(e) => {
+                                    const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                    updatedSlides[sIdx] = { ...slide, headlineLine1: e.target.value };
+                                    setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                  }}
+                                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs"
+                                />
+                              </div>
+                              <div>
+                                <label className="block font-semibold text-slate-700 mb-1">Headline Line 2</label>
+                                <input
+                                  type="text"
+                                  value={slide.headlineLine2}
+                                  onChange={(e) => {
+                                    const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                    updatedSlides[sIdx] = { ...slide, headlineLine2: e.target.value };
+                                    setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                  }}
+                                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-700 mb-1">Subheading / Description</label>
+                              <textarea
+                                rows={2}
+                                value={slide.subheading}
+                                onChange={(e) => {
+                                  const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                  updatedSlides[sIdx] = { ...slide, subheading: e.target.value };
+                                  setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                }}
+                                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -2131,6 +2405,138 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD / EDIT DISTRICT & LOCATION */}
+      {isLocationModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-[#C6A878]" />
+                <span>{editingLocation ? 'Edit Cebu Prime District' : 'Add New Prime District'}</span>
+              </h3>
+              <button
+                onClick={() => setIsLocationModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveLocation} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  District / City Zone Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Cebu Business Park, Talamban, Cordova..."
+                  value={locName}
+                  onChange={(e) => setLocName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Tagline / High-Level Identifier
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Premier Financial District, Island Waterfront..."
+                  value={locTagline}
+                  onChange={(e) => setLocTagline(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  District Narrative & Highlights
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Describe location appeal, nearby road networks, lifestyle amenities, and investment potential..."
+                  value={locDescription}
+                  onChange={(e) => setLocDescription(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Photograph Image URL
+                </label>
+                <input
+                  type="text"
+                  value={locImage}
+                  onChange={(e) => setLocImage(e.target.value)}
+                  placeholder="Enter image URL or select from presets below"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                />
+
+                {/* Preset Image Options */}
+                <div className="pt-1">
+                  <span className="text-[10px] text-slate-500 block mb-1">Quick Select Available Cebu Assets:</span>
+                  <div className="flex flex-wrap gap-1.5 text-[10px]">
+                    {[
+                      { name: 'Alcoves Pool', url: '/assets/extracted/photo_the_alcoves.png' },
+                      { name: 'Park Avenue Tower', url: '/assets/extracted/photo_park_avenue.png' },
+                      { name: 'Mactan Coastal', url: '/assets/extracted/loc_mactan.png' },
+                      { name: 'Banilad Enclave', url: '/assets/extracted/loc_banilad.png' },
+                      { name: 'Skyline Panorama', url: '/assets/extracted/hero_skyline_clean.png' },
+                      { name: 'Astra Commercial', url: '/assets/extracted/astra_centre.png' },
+                    ].map((asset) => (
+                      <button
+                        key={asset.name}
+                        type="button"
+                        onClick={() => setLocImage(asset.url)}
+                        className={`px-2 py-1 rounded-lg border text-[10px] transition-colors ${
+                          locImage === asset.url
+                            ? 'bg-[#17243B] text-[#C6A878] border-[#17243B] font-bold'
+                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {asset.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {locImage && (
+                  <div className="aspect-[16/9] w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 relative mt-2">
+                    <img
+                      src={locImage}
+                      alt="District Preview"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsLocationModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingLoc}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingLoc ? 'Saving District...' : 'Save District'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
