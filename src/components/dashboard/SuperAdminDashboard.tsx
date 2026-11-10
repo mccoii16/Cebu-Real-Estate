@@ -36,6 +36,7 @@ import {
   Save,
   Phone,
   Layers,
+  Upload,
 } from 'lucide-react';
 import {
   PropertyDoc,
@@ -52,6 +53,7 @@ import { doc, updateDoc, deleteDoc, addDoc, collection, setDoc } from 'firebase/
 import { db } from '../../services/firebase';
 import { getWebsiteSettings, saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from '../../services/settingsService';
 import { getAllLocations, saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
+import { uploadSiteAsset } from '../../services/storageService';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -1877,9 +1879,32 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                             </div>
 
                             <div>
-                              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                                Photo Image URL
-                              </label>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="block text-[11px] font-semibold text-slate-700">
+                                  Photo Image URL or Upload
+                                </label>
+                                <label className="cursor-pointer text-[10px] text-[#C6A878] hover:text-[#17243B] font-semibold flex items-center gap-1">
+                                  <Upload className="w-3 h-3" />
+                                  <span>Upload New Photo</span>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                      const file = e.target.files?.[0];
+                                      if (!file) return;
+                                      try {
+                                        const res = await uploadSiteAsset(file, 'hero-slides');
+                                        const updatedSlides = [...(siteSettings.heroSlides || [])];
+                                        updatedSlides[sIdx] = { ...slide, image: res.url };
+                                        setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                      } catch (err: any) {
+                                        alert('Upload failed: ' + (err.message || 'Please check Storage rules'));
+                                      }
+                                    }}
+                                  />
+                                </label>
+                              </div>
                               <input
                                 type="text"
                                 value={slide.image}

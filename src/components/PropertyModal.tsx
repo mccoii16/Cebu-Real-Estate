@@ -162,31 +162,43 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="property-modal-title"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 bg-black/80 backdrop-blur-sm overflow-y-auto"
+        className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm p-4 sm:p-6 md:p-8 flex justify-center items-start"
         onClick={onClose}
       >
         <div
-          className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-auto sm:my-10 max-h-[90vh] flex flex-col"
+          className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-8 sm:my-12 flex flex-col max-h-[calc(100vh-4rem)] sm:max-h-[calc(100vh-6rem)]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header Media Banner with Multi-Image Gallery */}
-          <div className="relative w-full h-72 sm:h-96 bg-slate-950 overflow-hidden group flex-shrink-0">
+          <div
+            onClick={() => setIsFullscreen(true)}
+            title="Click to view photo fullscreen"
+            className="relative w-full h-72 sm:h-96 bg-slate-950 overflow-hidden group flex-shrink-0 cursor-pointer"
+          >
             <img
               src={currentImage}
               alt={property.propertyTitle}
-              className="w-full h-full object-cover object-center transition-all duration-300"
+              className="w-full h-full object-cover object-center group-hover:scale-105 transition-all duration-300"
               referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
 
+            {/* Click to expand pill on hover */}
+            <div className="absolute bottom-16 left-4 z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
+              <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md text-white text-xs font-medium flex items-center gap-1.5 border border-white/20">
+                <Maximize className="w-3.5 h-3.5 text-[#C6A878]" />
+                <span>Click photo to expand fullscreen</span>
+              </span>
+            </div>
+
             {/* Top Right Action Cluster: Fullscreen & Close */}
-            <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
+            <div className="absolute top-4 right-4 flex items-center gap-2 z-20" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => setIsFullscreen(true)}
                 title="View Fullscreen"
                 aria-label="View photo fullscreen"
-                className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors focus:outline-none"
+                className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors focus:outline-none shadow-md"
               >
                 <Maximize className="w-4 h-4" />
               </button>

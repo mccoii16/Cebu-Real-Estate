@@ -105,24 +105,24 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right Action Cluster */}
-      <div className="flex items-center gap-2.5 sm:gap-3">
+      <div className="flex items-center gap-2 sm:gap-2.5 flex-nowrap flex-shrink-0">
         {/* Search Icon Button */}
         <button
           onClick={onOpenSearch}
           aria-label="Open search dialog"
-          className="w-9 h-9 sm:w-10 sm:h-10 rounded-full border border-white/20 bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878]"
+          className="w-8 h-8 sm:w-9 sm:h-9 rounded-full border border-white/20 bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] flex-shrink-0"
         >
-          <Search className="w-4 h-4 text-white/90" />
+          <Search className="w-3.5 h-3.5 text-white/90" />
         </button>
 
         {/* Saved Favorites Trigger */}
         <button
           onClick={onOpenFavorites}
           aria-label={`View saved favorites (${favoriteCount})`}
-          className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-full border border-white/20 bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878]"
+          className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-full border border-white/20 bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] flex-shrink-0"
         >
           <Heart
-            className={`w-4 h-4 ${favoriteCount > 0 ? 'fill-[#C6A878] text-[#C6A878]' : 'text-white/90'}`}
+            className={`w-3.5 h-3.5 ${favoriteCount > 0 ? 'fill-[#C6A878] text-[#C6A878]' : 'text-white/90'}`}
           />
           {favoriteCount > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#C6A878] text-[#17243B] text-[10px] font-bold flex items-center justify-center shadow-sm">
@@ -131,11 +131,11 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* Staff / Agent / Super Admin Portal Button */}
+        {/* Staff / Agent / Super Admin Portal Button (Strictly 1 line, compact) */}
         <button
           onClick={onOpenPortal}
           title={userRole ? `${userDisplayName || 'User'} (${userRole})` : 'Staff & Agent Portal'}
-          className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 transition-all duration-200 ${
+          className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full border text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 leading-none transition-all duration-200 ${
             userRole === 'superadmin'
               ? 'bg-[#C6A878] text-[#17243B] border-[#C6A878] hover:bg-[#b89764] shadow-sm'
               : userRole === 'agent'
@@ -143,7 +143,7 @@ export const Header: React.FC<HeaderProps> = ({
               : 'border-white/20 bg-white/10 text-white/90 hover:text-white hover:bg-white/20'
           }`}
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-[#17243B]" />
+          <span className="w-1.5 h-1.5 rounded-full bg-[#17243B] flex-shrink-0" />
           <span className="whitespace-nowrap">
             {userRole === 'superadmin'
               ? 'Admin Dashboard'
@@ -153,13 +153,13 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         </button>
 
-        {/* Primary CTA: Inquire Now -> */}
+        {/* Primary CTA: Inquire Now -> (Strictly 1 line, compact) */}
         <button
           onClick={onOpenInquire}
-          className="hidden sm:inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full bg-[#F8F7F3] hover:bg-white text-[#17243B] text-xs sm:text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 transition-all duration-200 shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:shadow-[0_6px_20px_rgba(0,0,0,0.2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] active:scale-[0.98]"
+          className="hidden sm:inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-full bg-[#F8F7F3] hover:bg-white text-[#17243B] text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 leading-none transition-all duration-200 shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:shadow-[0_6px_20px_rgba(0,0,0,0.2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] active:scale-[0.98]"
         >
           <span className="whitespace-nowrap">Inquire Now</span>
-          <ArrowRight className="w-3.5 h-3.5 text-[#17243B]" />
+          <ArrowRight className="w-3.5 h-3.5 text-[#17243B] flex-shrink-0" />
         </button>
 
         {/* Mobile Hamburger Toggle */}
