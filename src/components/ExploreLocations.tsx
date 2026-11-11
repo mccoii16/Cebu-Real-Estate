@@ -31,10 +31,10 @@ export const ExploreLocations: React.FC<ExploreLocationsProps> = ({
           </p>
           <button
             onClick={onBrowseAllLocations}
-            className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#17243B] hover:text-[#C6A878] transition-colors group self-start"
+            className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#17243B] hover:text-[#C6A878] transition-colors group self-start whitespace-nowrap flex-nowrap shrink-0"
           >
-            <span>Browse All Locations</span>
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            <span className="whitespace-nowrap">Browse All Locations</span>
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flex-shrink-0" />
           </button>
         </div>
 

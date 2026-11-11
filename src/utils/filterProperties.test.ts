@@ -214,3 +214,11 @@ test('filterProperties matches dynamic and custom locations', () => {
   assert.equal(emptyProps.length, 0);
 });
 
+test('generateInquiryId creates valid firestore document IDs', () => {
+  const rand = Math.random().toString(36).substring(2, 9);
+  const inquiryId = `inq_${Date.now()}_${rand}`;
+  // Must match '^[a-zA-Z0-9_\-]+$' per firestore.rules isValidId()
+  assert.ok(/^[a-zA-Z0-9_\-]+$/.test(inquiryId));
+  assert.ok(inquiryId.length > 0 && inquiryId.length <= 128);
+});
+

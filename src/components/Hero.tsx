@@ -165,10 +165,10 @@ export const Hero: React.FC<HeroProps> = ({ onExploreClick, settings }) => {
           >
             <button
               onClick={onExploreClick}
-              className="inline-flex items-center gap-2 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full border border-white/25 bg-[#17243B]/60 hover:bg-[#17243B] text-white font-medium text-sm tracking-wide transition-all duration-200 shadow-lg hover:border-[#C6A878] group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878]"
+              className="inline-flex items-center gap-2 px-5 sm:px-7 py-3 sm:py-3.5 rounded-full border border-white/25 bg-[#17243B]/60 hover:bg-[#17243B] text-white font-medium text-xs sm:text-sm tracking-wide transition-all duration-200 shadow-lg hover:border-[#C6A878] group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] whitespace-nowrap flex-nowrap shrink-0"
             >
-              <span>Explore Listings</span>
-              <ArrowRight className="w-4 h-4 text-white group-hover:translate-x-1 transition-transform" />
+              <span className="whitespace-nowrap">Explore Listings</span>
+              <ArrowRight className="w-4 h-4 text-white group-hover:translate-x-1 transition-transform flex-shrink-0" />
             </button>
           </motion.div>
         </div>

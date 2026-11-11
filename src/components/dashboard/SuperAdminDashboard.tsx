@@ -37,6 +37,8 @@ import {
   Phone,
   Layers,
   Upload,
+  MessageCircle,
+  ArrowRight,
 } from 'lucide-react';
 import {
   PropertyDoc,
@@ -55,6 +57,11 @@ import { getWebsiteSettings, saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } fro
 import { getAllLocations, saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
 import { uploadSiteAsset } from '../../services/storageService';
 import { createAgentFirebaseAuthUser } from '../../services/agentAuthService';
+import {
+  subscribeToInquiries,
+  updateInquiryStatus as updateInquiryStatusService,
+  deleteInquiry as deleteInquiryService,
+} from '../../services/inquiryService';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -203,22 +210,25 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
-  // Fetch inquiries from backend
-  const loadInquiries = async () => {
-    try {
-      const token = await user?.getIdToken();
-      if (!token) return;
-      const res = await fetch('/api/admin/inquiries', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setInquiries(data.inquiries || []);
+  // Real-time synchronization of customer inquiries (dispatched directly to Martiligando@gmail.com)
+  useEffect(() => {
+    loadAgents();
+    loadSettings();
+
+    // Subscribe to live Firestore inquiries with automatic offline local buffer
+    const unsubscribe = subscribeToInquiries(
+      (liveInquiries) => {
+        setInquiries(liveInquiries as InquiryDoc[]);
+      },
+      (err) => {
+        console.warn('Real-time inquiries fallback:', err);
       }
-    } catch (err) {
-      console.error('Error fetching inquiries:', err);
-    }
-  };
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user]);
 
   // Fetch website settings from Firestore
   const loadSettings = async () => {
@@ -230,12 +240,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
-  useEffect(() => {
-    loadAgents();
-    loadInquiries();
-    loadSettings();
-  }, [user]);
-
   // Update Inquiry Status (new -> contacted -> closed)
   const handleUpdateInquiryStatus = async (
     inquiryId: string,
@@ -243,28 +247,25 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   ) => {
     setInquiryStatusUpdating(inquiryId);
     try {
-      const token = await user?.getIdToken();
-      const res = await fetch(`/api/admin/inquiries/${inquiryId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
-
-      if (res.ok) {
-        setInquiries((prev) =>
-          prev.map((inq) => (inq.inquiryId === inquiryId ? { ...inq, status: newStatus } : inq))
-        );
-      } else {
-        const errData = await res.json();
-        alert(`Failed to update status: ${errData.error || 'Server error'}`);
-      }
+      await updateInquiryStatusService(inquiryId, newStatus);
+      setInquiries((prev) =>
+        prev.map((inq) => (inq.inquiryId === inquiryId ? { ...inq, status: newStatus } : inq))
+      );
     } catch (err: any) {
       alert(`Error updating inquiry status: ${err.message}`);
     } finally {
       setInquiryStatusUpdating(null);
+    }
+  };
+
+  // Delete Inquiry
+  const handleDeleteInquiry = async (inquiryId: string) => {
+    if (!window.confirm('Are you sure you want to remove this client inquiry record?')) return;
+    try {
+      await deleteInquiryService(inquiryId);
+      setInquiries((prev) => prev.filter((inq) => inq.inquiryId !== inquiryId));
+    } catch (err: any) {
+      alert(`Could not delete inquiry: ${err.message}`);
     }
   };
 
@@ -888,6 +889,32 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
         {/* Ivory Main Content Area */}
         <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto space-y-6">
+          {/* New Inquiries Quick Notice Banner */}
+          {inquiries.filter((i) => i.status === 'new').length > 0 && activeSection !== 'inquiries' && (
+            <div className="bg-gradient-to-r from-amber-500/10 via-[#C6A878]/15 to-amber-500/10 border border-[#C6A878]/50 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#C6A878] text-[#17243B] flex items-center justify-center font-bold flex-shrink-0 animate-pulse">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-[#17243B]">
+                    {inquiries.filter((i) => i.status === 'new').length} New Client Inquiry Received!
+                  </h4>
+                  <p className="text-xs text-slate-600">
+                    Client consultation & property viewing requests are awaiting your review and response.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveSection('inquiries')}
+                className="px-4 py-1.5 rounded-full bg-[#17243B] hover:bg-[#203150] text-[#C6A878] text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <span>View Inquiries ({inquiries.filter((i) => i.status === 'new').length} New)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* SECTION 1: PENDING APPROVALS */}
           {activeSection === 'approvals' && (
             <div className="space-y-6">
@@ -1755,6 +1782,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         <th className="px-4 py-3.5">Message / Request</th>
                         <th className="px-4 py-3.5">Date</th>
                         <th className="px-4 py-3.5">Status</th>
+                        <th className="px-4 py-3.5 text-center">Quick Reply</th>
                         <th className="px-5 py-3.5 text-right">Update Status</th>
                       </tr>
                     </thead>
@@ -1762,22 +1790,30 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       {inquiries.length > 0 ? (
                         inquiries.map((inq) => {
                           const isUpdating = inquiryStatusUpdating === inq.inquiryId;
+                          const cleanPhone = (inq.phone || '').replace(/[^0-9]/g, '');
+                          const mailSubject = encodeURIComponent(`Cebu Prime Properties: Regarding your inquiry on ${inq.propertyInterest}`);
+                          const mailBody = encodeURIComponent(
+                            `Hello ${inq.fullName},\n\nThank you for reaching out to Cebu Prime Properties regarding ${inq.propertyInterest}.\n\n`
+                          );
+
                           return (
                             <tr key={inq.inquiryId} className="hover:bg-slate-50 transition-colors">
                               <td className="px-5 py-3.5 font-bold text-slate-900 whitespace-nowrap">
                                 {inq.fullName}
                               </td>
                               <td className="px-4 py-3.5">
-                                <div className="font-medium text-slate-800">{inq.email}</div>
-                                <div className="text-[10px] text-slate-400">
-                                  {inq.phone} • Via {inq.preferredContact || 'phone'}
+                                <div className="font-semibold text-slate-800">{inq.email}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  {inq.phone} • {inq.preferredContact || 'phone'}
                                 </div>
                               </td>
                               <td className="px-4 py-3.5 font-semibold text-[#C6A878] whitespace-nowrap">
                                 {inq.propertyInterest}
                               </td>
-                              <td className="px-4 py-3.5 text-slate-600 max-w-xs line-clamp-2">
-                                {inq.message || 'Standard brochure & private viewing request.'}
+                              <td className="px-4 py-3.5 text-slate-600 max-w-xs text-xs">
+                                <div className="line-clamp-2" title={inq.message}>
+                                  {inq.message || 'Standard brochure & private viewing request.'}
+                                </div>
                               </td>
                               <td className="px-4 py-3.5 text-slate-400 whitespace-nowrap">
                                 {new Date(inq.createdAt).toLocaleDateString()}
@@ -1786,21 +1822,52 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 <span
                                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
                                     inq.status === 'new'
-                                      ? 'bg-amber-100 text-amber-800'
+                                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
                                       : inq.status === 'contacted'
-                                      ? 'bg-blue-100 text-blue-800'
-                                      : 'bg-emerald-100 text-emerald-800'
+                                      ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                   }`}
                                 >
                                   {inq.status || 'new'}
                                 </span>
+                              </td>
+                              <td className="px-4 py-3.5 text-center whitespace-nowrap">
+                                <div className="inline-flex items-center gap-1.5">
+                                  <a
+                                    href={`mailto:${inq.email}?subject=${mailSubject}&body=${mailBody}`}
+                                    title={`Email ${inq.email}`}
+                                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-[#C6A878] hover:text-[#17243B] text-slate-700 transition-colors inline-flex items-center justify-center"
+                                  >
+                                    <Mail className="w-3.5 h-3.5" />
+                                  </a>
+                                  {cleanPhone && (
+                                    <a
+                                      href={`https://wa.me/${cleanPhone}?text=${encodeURIComponent(
+                                        `Hello ${inq.fullName}, this is Cebu Prime Properties following up on your inquiry for ${inq.propertyInterest}.`
+                                      )}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={`WhatsApp ${inq.phone}`}
+                                      className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 transition-colors inline-flex items-center justify-center"
+                                    >
+                                      <MessageCircle className="w-3.5 h-3.5" />
+                                    </a>
+                                  )}
+                                  <a
+                                    href={`tel:${inq.phone}`}
+                                    title={`Call ${inq.phone}`}
+                                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition-colors inline-flex items-center justify-center"
+                                  >
+                                    <Phone className="w-3.5 h-3.5" />
+                                  </a>
+                                </div>
                               </td>
                               <td className="px-5 py-3.5 text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     disabled={isUpdating || inq.status === 'new'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'new')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
                                       inq.status === 'new'
                                         ? 'bg-amber-500 text-white'
                                         : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
@@ -1811,7 +1878,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   <button
                                     disabled={isUpdating || inq.status === 'contacted'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'contacted')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
                                       inq.status === 'contacted'
                                         ? 'bg-blue-600 text-white'
                                         : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
@@ -1822,13 +1889,20 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   <button
                                     disabled={isUpdating || inq.status === 'closed'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'closed')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
                                       inq.status === 'closed'
                                         ? 'bg-emerald-600 text-white'
                                         : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                                     }`}
                                   >
                                     Closed
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteInquiry(inq.inquiryId)}
+                                    title="Delete inquiry"
+                                    className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </td>
@@ -1837,8 +1911,8 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         })
                       ) : (
                         <tr>
-                          <td colSpan={7} className="p-8 text-center text-slate-400">
-                            No inquiries recorded yet.
+                          <td colSpan={8} className="p-8 text-center text-slate-400">
+                            No inquiries recorded yet. Inquiries submitted on the website appear here automatically in real time.
                           </td>
                         </tr>
                       )}

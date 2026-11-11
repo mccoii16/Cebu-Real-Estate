@@ -446,14 +446,14 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
           <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
             <button
               onClick={() => onToggleFavorite(property.propertyId)}
-              className={`w-full sm:w-auto px-5 py-3 rounded-full border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
+              className={`w-full sm:w-auto px-5 py-3 rounded-full border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap flex-nowrap shrink-0 ${
                 isFavorite
                   ? 'border-[#C6A878] bg-[#C6A878]/10 text-[#C6A878]'
                   : 'border-slate-300 text-slate-700 hover:bg-slate-50'
               }`}
             >
-              <Heart className={`w-4 h-4 ${isFavorite ? 'fill-[#C6A878]' : ''}`} />
-              <span>{isFavorite ? 'Saved to Favorites' : 'Save to Favorites'}</span>
+              <Heart className={`w-4 h-4 flex-shrink-0 ${isFavorite ? 'fill-[#C6A878]' : ''}`} />
+              <span className="whitespace-nowrap">{isFavorite ? 'Saved to Favorites' : 'Save to Favorites'}</span>
             </button>
 
             <button
@@ -461,10 +461,10 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                 onInquireAboutProperty(property.propertyTitle);
                 onClose();
               }}
-              className="w-full sm:w-auto px-7 py-3 rounded-full bg-[#17243B] hover:bg-[#203150] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md active:scale-[0.98]"
+              className="w-full sm:w-auto px-6 sm:px-7 py-3 rounded-full bg-[#17243B] hover:bg-[#203150] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md active:scale-[0.98] whitespace-nowrap flex-nowrap shrink-0"
             >
-              <span>Inquire About This Property</span>
-              <ArrowRight className="w-4 h-4 text-[#C6A878]" />
+              <span className="whitespace-nowrap">Inquire About This Property</span>
+              <ArrowRight className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
             </button>
           </div>
         </div>

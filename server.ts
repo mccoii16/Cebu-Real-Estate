@@ -516,14 +516,14 @@ app.delete(
  */
 app.post('/api/inquiries', async (req: Request, res: Response) => {
   try {
-    const { fullName, email, phone, propertyInterest, preferredContact, message } = req.body;
+    const { inquiryId: providedId, fullName, email, phone, propertyInterest, preferredContact, message } = req.body;
 
     if (!fullName || !email || !phone) {
       res.status(400).json({ error: 'Name, email, and phone number are required' });
       return;
     }
 
-    const inquiryId = `inq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const inquiryId = providedId || `inq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const inquiryData = {
       inquiryId,
       fullName,
@@ -534,7 +534,15 @@ app.post('/api/inquiries', async (req: Request, res: Response) => {
       message: message || '',
       status: 'new',
       createdAt: new Date().toISOString(),
+      recipientEmail: 'Martiligando@gmail.com',
     };
+
+    console.log(`\n=======================================================`);
+    console.log(`🔔 [NEW INQUIRY RECEIVED FOR Martiligando@gmail.com]`);
+    console.log(`From: ${fullName} (${email}, Phone: ${phone})`);
+    console.log(`Interested in: ${propertyInterest}`);
+    console.log(`Message: ${message || 'No additional note'}`);
+    console.log(`=======================================================\n`);
 
     // Store in memory repository
     fallbackInquiries.set(inquiryId, inquiryData);

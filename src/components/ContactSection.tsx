@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Mail, Phone, MapPin, Clock, Send, CheckCircle2 } from 'lucide-react';
+import { Mail, Phone, MapPin, Clock, Send, CheckCircle2, MessageCircle } from 'lucide-react';
 import { validateInquiryForm } from '../utils/filterProperties';
+import { submitInquiry, MASTER_ADMIN_EMAIL } from '../services/inquiryService';
 
 interface ContactSectionProps {
   initialPropertyInterest?: string;
@@ -18,7 +19,7 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const validation = validateInquiryForm({ fullName, email, phone, message });
     if (!validation.isValid) {
@@ -29,27 +30,23 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
     setErrors({});
     setIsSubmitting(true);
 
-    fetch('/api/inquiries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    try {
+      await submitInquiry({
         fullName,
         email,
         phone,
         propertyInterest,
         preferredContact: 'phone',
         message,
-      }),
-    })
-      .then(() => {
-        setIsSubmitting(false);
-        setIsSubmitted(true);
-      })
-      .catch((err) => {
-        console.error('Inquiry error:', err);
-        setIsSubmitting(false);
-        setIsSubmitted(true);
       });
+      setIsSubmitted(true);
+    } catch (err) {
+      console.error('Inquiry error:', err);
+      // Still show submitted because local buffer preserves it
+      setIsSubmitted(true);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleReset = () => {
@@ -123,20 +120,39 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
           {/* Right Column: Interactive Consultation Form */}
           <div className="lg:col-span-7 bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-xl">
             {isSubmitted ? (
-              <div className="py-12 text-center flex flex-col items-center">
-                <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
+              <div className="py-8 text-center flex flex-col items-center">
+                <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3">
                   <CheckCircle2 className="w-8 h-8" />
                 </div>
-                <h3 className="text-2xl font-bold text-[#17243B] mb-2">Inquiry Received</h3>
-                <p className="text-sm text-slate-600 max-w-md mx-auto mb-6">
-                  Thank you for your interest in <span className="font-semibold text-[#17243B]">{propertyInterest}</span>. A senior property consultant has received your inquiry and will reach out to <span className="font-semibold text-[#17243B]">{email}</span> within 2 hours.
+                <h3 className="text-2xl font-bold text-[#17243B] mb-1">Inquiry Received</h3>
+                <p className="text-sm text-slate-600 max-w-md mx-auto mb-3">
+                  Thank you, <span className="font-semibold text-slate-900">{fullName}</span>. Your inquiry for <span className="font-semibold text-[#17243B]">{propertyInterest}</span> has been received directly by our Master Real Estate Authority.
                 </p>
-                <button
-                  onClick={handleReset}
-                  className="px-6 py-2.5 rounded-full bg-[#17243B] text-white text-xs font-semibold hover:bg-[#253754] transition-colors"
-                >
-                  Send Another Inquiry
-                </button>
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 max-w-md mb-6 text-left flex items-start gap-2.5">
+                  <Mail className="w-4 h-4 text-[#C6A878] flex-shrink-0 mt-0.5" />
+                  <span>
+                    Dispatched to: <strong>{MASTER_ADMIN_EMAIL}</strong>. A dedicated specialist will contact you at <strong>{phone}</strong> or <strong>{email}</strong> within 2 hours.
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row items-center gap-3 w-full justify-center">
+                  <a
+                    href={`https://wa.me/639175557890?text=${encodeURIComponent(
+                      `Hello Cebu Prime Properties, I just submitted an inquiry for ${propertyInterest}. My name is ${fullName}.`
+                    )}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shadow-sm"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    <span className="whitespace-nowrap">Instant WhatsApp Chat</span>
+                  </a>
+                  <button
+                    onClick={handleReset}
+                    className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-[#17243B] text-white text-xs font-semibold hover:bg-[#253754] transition-colors whitespace-nowrap"
+                  >
+                    <span className="whitespace-nowrap">Send Another Inquiry</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <form onSubmit={handleSubmit} noValidate className="space-y-4">
@@ -251,10 +267,10 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-3.5 px-6 rounded-full bg-[#17243B] hover:bg-[#203150] text-white font-medium text-sm flex items-center justify-center gap-2 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50"
+                  className="w-full py-3.5 px-4 rounded-full bg-[#17243B] hover:bg-[#203150] text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50 whitespace-nowrap flex-nowrap"
                 >
-                  <Send className="w-4 h-4 text-[#C6A878]" />
-                  <span>{isSubmitting ? 'Submitting Inquiry...' : 'Submit Inquiry & Request Brochure'}</span>
+                  <Send className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
+                  <span className="whitespace-nowrap">{isSubmitting ? 'Submitting Inquiry...' : 'Submit Inquiry & Request Brochure'}</span>
                 </button>
               </form>
             )}

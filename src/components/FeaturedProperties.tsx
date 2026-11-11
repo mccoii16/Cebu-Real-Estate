@@ -36,10 +36,10 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
 
         <button
           onClick={onViewAllClick}
-          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#17243B] hover:text-[#C6A878] transition-colors group self-start sm:self-auto py-1"
+          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#17243B] hover:text-[#C6A878] transition-colors group self-start sm:self-auto py-1 whitespace-nowrap flex-nowrap shrink-0"
         >
-          <span>View All Properties ({properties.length})</span>
-          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          <span className="whitespace-nowrap">View All Properties ({properties.length})</span>
+          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flex-shrink-0" />
         </button>
       </div>
 

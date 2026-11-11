@@ -135,7 +135,8 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onOpenPortal}
           title={userRole ? `${userDisplayName || 'User'} (${userRole})` : 'Staff & Agent Portal'}
-          className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full border text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 leading-none transition-all duration-200 ${
+          style={{ whiteSpace: 'nowrap' }}
+          className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full border text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap shrink-0 leading-none transition-all duration-200 ${
             userRole === 'superadmin'
               ? 'bg-[#C6A878] text-[#17243B] border-[#C6A878] hover:bg-[#b89764] shadow-sm'
               : userRole === 'agent'
@@ -144,7 +145,7 @@ export const Header: React.FC<HeaderProps> = ({
           }`}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[#17243B] flex-shrink-0" />
-          <span className="whitespace-nowrap">
+          <span className="whitespace-nowrap inline-block">
             {userRole === 'superadmin'
               ? 'Admin Dashboard'
               : userRole === 'agent'
@@ -156,9 +157,10 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Primary CTA: Inquire Now -> (Strictly 1 line, compact) */}
         <button
           onClick={onOpenInquire}
-          className="hidden sm:inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-full bg-[#F8F7F3] hover:bg-white text-[#17243B] text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap flex-shrink-0 leading-none transition-all duration-200 shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:shadow-[0_6px_20px_rgba(0,0,0,0.2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] active:scale-[0.98]"
+          style={{ whiteSpace: 'nowrap' }}
+          className="hidden sm:inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-full bg-[#F8F7F3] hover:bg-white text-[#17243B] text-[11px] sm:text-xs font-semibold tracking-wide whitespace-nowrap shrink-0 leading-none transition-all duration-200 shadow-[0_4px_16px_rgba(0,0,0,0.12)] hover:shadow-[0_6px_20px_rgba(0,0,0,0.2)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] active:scale-[0.98]"
         >
-          <span className="whitespace-nowrap">Inquire Now</span>
+          <span className="whitespace-nowrap inline-block">Inquire Now</span>
           <ArrowRight className="w-3.5 h-3.5 text-[#17243B] flex-shrink-0" />
         </button>
 
@@ -205,9 +207,9 @@ export const Header: React.FC<HeaderProps> = ({
                   setMobileMenuOpen(false);
                   onOpenPortal();
                 }}
-                className="w-full py-2.5 rounded-full border border-white/20 text-white hover:bg-white/10 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                className="w-full py-2.5 px-3 rounded-full border border-white/20 text-white hover:bg-white/10 text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
               >
-                <span>
+                <span className="whitespace-nowrap">
                   {userRole === 'superadmin'
                     ? 'Super Admin Dashboard'
                     : userRole === 'agent'
@@ -221,10 +223,10 @@ export const Header: React.FC<HeaderProps> = ({
                   setMobileMenuOpen(false);
                   onOpenInquire();
                 }}
-                className="w-full py-3 rounded-full bg-[#C6A878] hover:bg-[#b59664] text-[#17243B] text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                className="w-full py-2.5 px-3 rounded-full bg-[#C6A878] hover:bg-[#b59664] text-[#17243B] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
               >
-                <span>Inquire Now</span>
-                <ArrowRight className="w-4 h-4" />
+                <span className="whitespace-nowrap">Inquire Now</span>
+                <ArrowRight className="w-4 h-4 flex-shrink-0" />
               </button>
             </div>
           </div>
