@@ -54,6 +54,7 @@ import { db } from '../../services/firebase';
 import { getWebsiteSettings, saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from '../../services/settingsService';
 import { getAllLocations, saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
 import { uploadSiteAsset } from '../../services/storageService';
+import { createAgentFirebaseAuthUser } from '../../services/agentAuthService';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -123,7 +124,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentEmail, setNewAgentEmail] = useState('');
   const [newAgentPassword, setNewAgentPassword] = useState('');
-  const [createdAgentInfo, setCreatedAgentInfo] = useState<{ email: string; pass: string } | null>(null);
+  const [createdAgentInfo, setCreatedAgentInfo] = useState<{ email: string; pass: string; warning?: string } | null>(null);
 
   // Property Filters & Actions
   const [propertySearch, setPropertySearch] = useState('');
@@ -491,78 +492,100 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
     const defaultPass = `CebuAgent@${Math.floor(100000 + Math.random() * 900000)}`;
     const temporaryPass = newAgentPassword.trim() || defaultPass;
-    const newUid = `agent-${Date.now()}`;
     const now = new Date().toISOString();
 
-    let savedAgent: UserProfile | null = null;
-
     try {
-      // 1. Attempt backend API first if available
+      let agentUid = `agent-${Date.now()}`;
+      let warningNotice: string | undefined;
+
+      // 1. Register the user in Firebase Authentication using secondary app
+      const authResult = await createAgentFirebaseAuthUser(email, temporaryPass, displayName);
+      if (authResult.success && authResult.uid) {
+        agentUid = authResult.uid;
+      } else if (!authResult.success) {
+        if (authResult.error === 'auth/operation-not-allowed') {
+          warningNotice = 'Email/Password sign-in provider is disabled in Firebase project cebu-real-estate-84294. Please enable Email/Password in Firebase Console (Authentication > Sign-in method) so this agent can log in with their password.';
+        } else {
+          warningNotice = `Firebase Auth notice: ${authResult.error}. Note that the agent can also sign in with Google using this email address.`;
+        }
+      }
+
+      // 2. Direct Firestore profile persistence
+      const agentProfile: UserProfile = {
+        uid: agentUid,
+        email,
+        displayName,
+        role: 'agent',
+        status: 'active',
+        temporaryPassword: temporaryPass,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: user?.uid,
+        createdByEmail: user?.email || undefined,
+      };
+
+      try {
+        await setDoc(doc(db, 'users', agentUid), agentProfile);
+      } catch (dbErr: any) {
+        console.warn('[CreateAgent] Firestore setDoc note:', dbErr.message);
+      }
+
+      // 3. Optional backend synchronization
       try {
         const token = await user?.getIdToken();
-        const res = await fetch('/api/admin/agents', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            displayName,
-            email,
-            password: temporaryPass,
-          }),
-        });
-
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const data = await res.json();
-          if (res.ok && data.agent) {
-            savedAgent = data.agent;
-          } else if (!res.ok) {
-            console.warn('[CreateAgent] Backend API note:', data.error);
-          }
-        } else {
-          console.warn('[CreateAgent] Backend returned non-JSON response (e.g. static host/Vercel).');
+        if (token) {
+          fetch('/api/admin/agents', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              displayName,
+              email,
+              password: temporaryPass,
+            }),
+          }).catch(() => {});
         }
-      } catch (apiErr: any) {
-        console.warn('[CreateAgent] Backend API unavailable, creating directly in Firestore:', apiErr.message);
-      }
-
-      // 2. Direct Firestore fallback (ensures 100% success on Vercel and local dev)
-      if (!savedAgent) {
-        const agentProfile: UserProfile = {
-          uid: newUid,
-          email,
-          displayName,
-          role: 'agent',
-          status: 'active',
-          temporaryPassword: temporaryPass,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: user?.uid,
-          createdByEmail: user?.email || undefined,
-        };
-
-        try {
-          await setDoc(doc(db, 'users', newUid), agentProfile);
-        } catch (dbErr: any) {
-          console.warn('[CreateAgent] Firestore setDoc note:', dbErr.message);
-        }
-        savedAgent = agentProfile;
-      }
+      } catch {}
 
       setCreatedAgentInfo({
-        email: savedAgent.email,
-        pass: savedAgent.temporaryPassword || temporaryPass,
+        email: agentProfile.email,
+        pass: temporaryPass,
+        warning: warningNotice,
       });
 
       setNewAgentName('');
       setNewAgentEmail('');
       setNewAgentPassword('');
-      setAgents((prev) => [savedAgent!, ...prev.filter((a) => a.uid !== savedAgent!.uid)]);
+      setAgents((prev) => [agentProfile, ...prev.filter((a) => a.uid !== agentUid)]);
       loadAgents();
     } catch (err: any) {
       setActionError(err.message || 'Failed to create agent account');
+    }
+  };
+
+  // Provision / Setup Auth Password for existing Agent
+  const handleProvisionAgentAuth = async (agent: UserProfile) => {
+    const defaultPass = `CebuAgent@${Math.floor(100000 + Math.random() * 900000)}`;
+    const pass = agent.temporaryPassword || defaultPass;
+    const res = await createAgentFirebaseAuthUser(agent.email, pass, agent.displayName);
+    if (res.success) {
+      await updateDoc(doc(db, 'users', agent.uid), {
+        temporaryPassword: pass,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+      setCreatedAgentInfo({
+        email: agent.email,
+        pass,
+      });
+      setIsCreateAgentOpen(true);
+    } else if (res.error === 'auth/operation-not-allowed') {
+      alert(
+        'Email/Password sign-in provider is disabled in Firebase project cebu-real-estate-84294. Please enable Email/Password in Firebase Console: https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/providers'
+      );
+    } else {
+      alert(`Could not register in Firebase Auth: ${res.error}`);
     }
   };
 
@@ -1234,8 +1257,17 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 ({agent.approvedCount || 0} approved, {agent.pendingCount || 0} pending)
                               </span>
                             </td>
-                            <td className="px-5 py-3.5 text-right">
+                            <td className="px-4 py-3.5 text-right">
                               <div className="flex items-center justify-end gap-2">
+                                <button
+                                  onClick={() => handleProvisionAgentAuth(agent)}
+                                  title="Provision / View Firebase Auth Login"
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-[#C6A878] hover:text-[#17243B] flex items-center gap-1 transition-colors"
+                                >
+                                  <Key className="w-3.5 h-3.5" />
+                                  <span>Sync Auth</span>
+                                </button>
+
                                 <button
                                   onClick={() => handleToggleAgentStatus(agent)}
                                   title={agent.status === 'active' ? 'Disable Agent' : 'Enable Agent'}
@@ -2211,19 +2243,45 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
               <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-2 text-xs">
                 <div className="font-bold text-emerald-700 flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Agent Account Created Successfully!</span>
+                  <span>Agent Account Registered!</span>
                 </div>
                 <p>Provide these login credentials to the Agent:</p>
                 <div className="bg-white p-3 rounded-lg border border-emerald-200 font-mono text-[11px] text-slate-800 space-y-1">
                   <div><strong>Email:</strong> {createdAgentInfo.email}</div>
                   <div><strong>Temporary Password:</strong> {createdAgentInfo.pass}</div>
+                  <div className="text-[10px] text-slate-500 font-sans mt-1">
+                    Connected Firebase Project: <strong>cebu-real-estate-84294</strong>
+                  </div>
                 </div>
+
+                {createdAgentInfo.warning && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] space-y-1.5">
+                    <p className="font-bold text-amber-800">⚠️ Setup Action Required in Firebase Console:</p>
+                    <p>{createdAgentInfo.warning}</p>
+                    <div className="pt-1">
+                      <a
+                        href="https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/providers"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-bold text-amber-900 hover:text-black inline-flex items-center gap-1"
+                      >
+                        <span>👉 Click here to enable Email/Password in Firebase Console</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-[11px] text-slate-600 bg-white/70 p-2.5 rounded-lg border border-emerald-100">
+                  💡 <strong>Google Sign-In:</strong> If preferred, the agent can also simply click <strong>Sign in with Google</strong> on the login portal using their work Google email address ({createdAgentInfo.email}).
+                </div>
+
                 <button
                   onClick={() => {
                     setCreatedAgentInfo(null);
                     setIsCreateAgentOpen(false);
                   }}
-                  className="w-full mt-3 py-2 bg-emerald-700 text-white font-bold rounded-lg"
+                  className="w-full mt-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-colors"
                 >
                   Done
                 </button>

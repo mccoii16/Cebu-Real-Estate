@@ -94,13 +94,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 <div className="mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-white/90 space-y-1.5">
                   <p className="font-bold text-[#C6A878]">Action Required in Firebase Console for Vercel/Custom Domain:</p>
                   <p>
-                    Your current deployment domain (<strong>{typeof window !== 'undefined' ? window.location.hostname : 'your-app.vercel.app'}</strong>) needs to be added to Firebase Authorized Domains:
+                    Your current deployment domain (<strong>{typeof window !== 'undefined' ? window.location.hostname : 'your-app.vercel.app'}</strong>) needs to be added to Firebase Authorized Domains in project <strong>cebu-real-estate-84294</strong>:
                   </p>
                   <ol className="list-decimal pl-4 space-y-0.5 text-white/80">
                     <li>Open <a href="https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/settings" target="_blank" rel="noreferrer" className="underline text-[#DFCDAA]">Firebase Authentication &gt; Settings &gt; Authorized domains</a>.</li>
                     <li>Click <strong>Add domain</strong> and enter: <code className="bg-white/20 px-1 rounded">{typeof window !== 'undefined' ? window.location.hostname : 'your-domain'}</code></li>
                     <li>Save, wait 10 seconds, and retry logging in.</li>
                   </ol>
+                </div>
+              )}
+
+              {(localError?.includes('invalid-credential') || authError?.includes('invalid-credential') || localError?.includes('user-not-found') || authError?.includes('user-not-found')) && (
+                <div className="mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-white/90 space-y-1.5">
+                  <p className="font-bold text-[#C6A878]">Troubleshooting (auth/invalid-credential) in project cebu-real-estate-84294:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-white/80">
+                    <li>
+                      <strong>Check Email/Password Provider:</strong> In Firebase Console, ensure <em>Email/Password</em> provider is enabled under <a href="https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/providers" target="_blank" rel="noreferrer" className="underline text-[#DFCDAA]">Authentication &gt; Sign-in method</a>.
+                    </li>
+                    <li>
+                      <strong>Agent Account Registration:</strong> Ensure the Super Admin has registered this agent in the Admin Dashboard.
+                    </li>
+                    <li>
+                      <strong>Alternative:</strong> If you have a Google account associated with this email, you can sign in directly using <strong>Sign in with Google</strong> above.
+                    </li>
+                  </ul>
+                </div>
+              )}
+
+              {(localError?.includes('operation-not-allowed') || authError?.includes('operation-not-allowed')) && (
+                <div className="mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-[11px] text-white/90 space-y-1.5">
+                  <p className="font-bold text-[#C6A878]">Email/Password Provider Disabled in Firebase:</p>
+                  <p>
+                    Project <strong>cebu-real-estate-84294</strong> currently has Email/Password authentication turned off.
+                  </p>
+                  <p>
+                    👉 <a href="https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/providers" target="_blank" rel="noreferrer" className="underline text-[#DFCDAA] font-bold">Open Firebase Console &gt; Sign-in method &gt; Enable Email/Password</a>
+                  </p>
                 </div>
               )}
             </div>

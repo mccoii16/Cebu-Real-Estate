@@ -70,7 +70,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('[AuthContext] Profile fetch warning:', err.message);
     }
 
-    // Direct, resilient authentication profile (essential for Vercel/Cloud Run deployments)
+    // Direct Firestore lookup by UID and Email
+    try {
+      const { doc, getDoc, collection, query, where, getDocs } = await import('firebase/firestore');
+      const { db } = await import('../services/firebase');
+
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        const uData = userSnap.data() as UserProfile;
+        if (uData.status === 'disabled') {
+          await firebaseSignOut(auth);
+          setUser(null);
+          setProfile(null);
+          setAuthError('Your Agent account has been deactivated by the Super Administrator.');
+          return;
+        }
+        setProfile(uData);
+        return;
+      }
+
+      if (currentUser.email) {
+        const q = query(collection(db, 'users'), where('email', '==', currentUser.email.toLowerCase()));
+        const qSnap = await getDocs(q);
+        if (!qSnap.empty) {
+          const uData = qSnap.docs[0].data() as UserProfile;
+          if (uData.status === 'disabled') {
+            await firebaseSignOut(auth);
+            setUser(null);
+            setProfile(null);
+            setAuthError('Your Agent account has been deactivated by the Super Administrator.');
+            return;
+          }
+          setProfile({ ...uData, uid: currentUser.uid });
+          return;
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[AuthContext] Firestore direct profile read notice:', fsErr);
+    }
+
+    // Direct, resilient authentication profile fallback
     const isOwner = currentUser.email?.toLowerCase() === 'martiligando@gmail.com';
     setProfile({
       uid: currentUser.uid,
