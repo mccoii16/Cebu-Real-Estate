@@ -196,3 +196,98 @@ export function canManagePropertyPhotos(
   return Boolean(userId && property.agentId && userId === property.agentId);
 }
 
+export const DEFAULT_INQUIRY_EMAIL_SUBJECT =
+  'New Property Inquiry: {{property}} — {{clientName}}';
+
+export const DEFAULT_INQUIRY_EMAIL_BODY = `Hello Cebu Prime Properties Team,
+
+A new client inquiry has been submitted through the website.
+
+Client Name: {{clientName}}
+Email Address: {{clientEmail}}
+Phone Number: {{clientPhone}}
+Property of Interest: {{property}}
+Submitted At: {{date}}
+
+Message / Request:
+{{message}}
+
+Please follow up promptly to schedule a consultation or private viewing.`;
+
+export function formatInquiryNotificationEmail(
+  template: { subject?: string; body?: string },
+  inquiry: {
+    fullName: string;
+    email: string;
+    phone: string;
+    propertyInterest?: string;
+    message?: string;
+    createdAt?: string;
+  }
+): { subject: string; body: string } {
+  const safeProperty = inquiry.propertyInterest?.trim() || 'General Property Inquiry';
+  const safeMessage = inquiry.message?.trim() || 'Requesting brochure, pricing, and private viewing schedule.';
+  const formattedDate = inquiry.createdAt
+    ? new Date(inquiry.createdAt).toLocaleString('en-US', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      })
+    : new Date().toLocaleString('en-US', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+
+  const applyTokens = (input: string) =>
+    input
+      .replace(/\{\{clientName\}\}/g, inquiry.fullName.trim())
+      .replace(/\{\{clientEmail\}\}/g, inquiry.email.trim())
+      .replace(/\{\{clientPhone\}\}/g, inquiry.phone.trim())
+      .replace(/\{\{property\}\}/g, safeProperty)
+      .replace(/\{\{message\}\}/g, safeMessage)
+      .replace(/\{\{date\}\}/g, formattedDate);
+
+  const subjectTpl = template.subject?.trim() || DEFAULT_INQUIRY_EMAIL_SUBJECT;
+  const bodyTpl = template.body?.trim() || DEFAULT_INQUIRY_EMAIL_BODY;
+
+  return {
+    subject: applyTokens(subjectTpl),
+    body: applyTokens(bodyTpl),
+  };
+}
+
+export function isDuplicateBuildingName(
+  buildings: Array<{ buildingId: string; buildingName: string }>,
+  name: string,
+  excludeBuildingId?: string
+): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return false;
+  return buildings.some(
+    (b) => b.buildingId !== excludeBuildingId && b.buildingName.trim().toLowerCase() === normalized
+  );
+}
+
+export function paginateItems<T>(
+  items: T[],
+  page: number,
+  pageSize: number
+): {
+  items: T[];
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+} {
+  const safeSize = Math.max(1, pageSize);
+  const totalItems = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / safeSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const start = (currentPage - 1) * safeSize;
+  return {
+    items: items.slice(start, start + safeSize),
+    currentPage,
+    totalPages,
+    totalItems,
+  };
+}
+
+

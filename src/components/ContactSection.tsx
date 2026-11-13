@@ -1,14 +1,28 @@
-import React, { useState } from 'react';
-import { Mail, Phone, MapPin, Clock, Send, CheckCircle2, MessageCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Mail, Phone, MapPin, Clock, Send, CheckCircle2 } from 'lucide-react';
 import { validateInquiryForm } from '../utils/filterProperties';
-import { submitInquiry, MASTER_ADMIN_EMAIL } from '../services/inquiryService';
+import { submitInquiry } from '../services/inquiryService';
+import { PropertyDoc, WebsiteSettings } from '../types/property';
 
 interface ContactSectionProps {
   initialPropertyInterest?: string;
+  properties?: PropertyDoc[];
+  siteSettings?: WebsiteSettings;
 }
+
+const FALLBACK_PROPERTY_OPTIONS = [
+  'The Alcoves',
+  '38 Park Avenue',
+  'Mactan Newtown Residences',
+  'Astra Centre',
+  'Lucima Luxury Residences',
+  'Banilad Estate Villa',
+];
 
 export const ContactSection: React.FC<ContactSectionProps> = ({
   initialPropertyInterest = 'The Alcoves',
+  properties = [],
+  siteSettings,
 }) => {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -18,6 +32,28 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (initialPropertyInterest) {
+      setPropertyInterest(initialPropertyInterest);
+    }
+  }, [initialPropertyInterest]);
+
+  const propertyOptions = useMemo(() => {
+    const titles = new Set<string>();
+    properties
+      .filter((p) => p.status === 'approved')
+      .forEach((p) => {
+        if (p.propertyTitle) titles.add(p.propertyTitle);
+      });
+    if (titles.size === 0) {
+      FALLBACK_PROPERTY_OPTIONS.forEach((t) => titles.add(t));
+    }
+    if (initialPropertyInterest && !titles.has(initialPropertyInterest)) {
+      titles.add(initialPropertyInterest);
+    }
+    return Array.from(titles);
+  }, [properties, initialPropertyInterest]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,13 +72,12 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
         email,
         phone,
         propertyInterest,
-        preferredContact: 'phone',
+        preferredContact: 'email',
         message,
       });
       setIsSubmitted(true);
     } catch (err) {
       console.error('Inquiry error:', err);
-      // Still show submitted because local buffer preserves it
       setIsSubmitted(true);
     } finally {
       setIsSubmitting(false);
@@ -54,20 +89,30 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
     setEmail('');
     setPhone('');
     setMessage('');
+    setErrors({});
     setIsSubmitted(false);
   };
 
+  const officeAddress =
+    siteSettings?.officeAddress?.trim() ||
+    'Level 22, Cebu Prime Tower, Cebu Business Park, Cebu City, 6000';
+  const contactPhone = siteSettings?.contactPhone?.trim() || '+63 (32) 412 8888';
+  const contactEmail = siteSettings?.contactEmail?.trim() || 'inquiries@cebuprimeproperties.ph';
+  const autoReplyNote =
+    siteSettings?.inquiryAutoReplyMessage?.trim() ||
+    'A dedicated Cebu Prime Properties specialist will review your request and follow up with you shortly.';
+
   return (
-    <section id="contact" className="w-full bg-[#F8F7F3] py-16 sm:py-24 border-t border-slate-200">
+    <section id="contact" className="w-full bg-[#F8F7F3] py-14 sm:py-24 border-t border-slate-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-start">
           {/* Left Column: Office & Direct Advisory Info */}
           <div className="lg:col-span-5">
             <div className="flex items-center gap-2 text-xs font-semibold tracking-[0.2em] text-[#C6A878] uppercase mb-3">
               <span>Private Client Consultation</span>
               <span className="w-8 h-px bg-[#C6A878]" />
             </div>
-            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#17243B] font-sans mb-4">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#17243B] font-sans mb-4">
               Connect With Our Cebu Property Specialists
             </h2>
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed mb-8">
@@ -79,9 +124,9 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                 <div className="w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center text-[#C6A878] flex-shrink-0 mt-0.5">
                   <MapPin className="w-4 h-4" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="font-semibold text-slate-900">Headquarters</div>
-                  <div className="text-slate-600">Level 22, Cebu Prime Tower, Cebu Business Park, Cebu City, 6000</div>
+                  <div className="text-slate-600 break-words">{officeAddress}</div>
                 </div>
               </div>
 
@@ -89,9 +134,9 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                 <div className="w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center text-[#C6A878] flex-shrink-0 mt-0.5">
                   <Phone className="w-4 h-4" />
                 </div>
-                <div>
-                  <div className="font-semibold text-slate-900">Direct Line & WhatsApp</div>
-                  <div className="text-slate-600">+63 (32) 234-8800 · +63 917 555 7890</div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900">Advisory Hotline</div>
+                  <div className="text-slate-600">{contactPhone}</div>
                 </div>
               </div>
 
@@ -99,9 +144,9 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                 <div className="w-9 h-9 rounded-full bg-white border border-slate-200 flex items-center justify-center text-[#C6A878] flex-shrink-0 mt-0.5">
                   <Mail className="w-4 h-4" />
                 </div>
-                <div>
-                  <div className="font-semibold text-slate-900">Inquiries</div>
-                  <div className="text-slate-600">inquiries@cebuprimeproperties.ph</div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900">Concierge Desk</div>
+                  <div className="text-slate-600 break-all">{contactEmail}</div>
                 </div>
               </div>
 
@@ -118,41 +163,29 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
           </div>
 
           {/* Right Column: Interactive Consultation Form */}
-          <div className="lg:col-span-7 bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-xl">
+          <div className="lg:col-span-7 bg-white rounded-3xl p-5 sm:p-10 border border-slate-200 shadow-xl">
             {isSubmitted ? (
               <div className="py-8 text-center flex flex-col items-center">
                 <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3">
                   <CheckCircle2 className="w-8 h-8" />
                 </div>
-                <h3 className="text-2xl font-bold text-[#17243B] mb-1">Inquiry Received</h3>
-                <p className="text-sm text-slate-600 max-w-md mx-auto mb-3">
-                  Thank you, <span className="font-semibold text-slate-900">{fullName}</span>. Your inquiry for <span className="font-semibold text-[#17243B]">{propertyInterest}</span> has been received directly by our Master Real Estate Authority.
+                <h3 className="text-xl sm:text-2xl font-bold text-[#17243B] mb-2">
+                  Inquiry Received
+                </h3>
+                <p className="text-sm text-slate-600 max-w-md mx-auto mb-3 leading-relaxed">
+                  Thank you, <span className="font-semibold text-slate-900">{fullName}</span>. Your inquiry regarding{' '}
+                  <span className="font-semibold text-[#17243B]">{propertyInterest}</span> has been securely submitted.
                 </p>
-                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 max-w-md mb-6 text-left flex items-start gap-2.5">
-                  <Mail className="w-4 h-4 text-[#C6A878] flex-shrink-0 mt-0.5" />
-                  <span>
-                    Dispatched to: <strong>{MASTER_ADMIN_EMAIL}</strong>. A dedicated specialist will contact you at <strong>{phone}</strong> or <strong>{email}</strong> within 2 hours.
-                  </span>
-                </div>
-                <div className="flex flex-col sm:flex-row items-center gap-3 w-full justify-center">
-                  <a
-                    href={`https://wa.me/639175557890?text=${encodeURIComponent(
-                      `Hello Cebu Prime Properties, I just submitted an inquiry for ${propertyInterest}. My name is ${fullName}.`
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shadow-sm"
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    <span className="whitespace-nowrap">Instant WhatsApp Chat</span>
-                  </a>
-                  <button
-                    onClick={handleReset}
-                    className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-[#17243B] text-white text-xs font-semibold hover:bg-[#253754] transition-colors whitespace-nowrap"
-                  >
-                    <span className="whitespace-nowrap">Send Another Inquiry</span>
-                  </button>
-                </div>
+                <p className="text-xs text-slate-500 max-w-md mx-auto mb-6 leading-relaxed bg-slate-50 border border-slate-200/80 rounded-2xl px-4 py-3">
+                  {autoReplyNote}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="w-full sm:w-auto min-h-[44px] px-7 py-2.5 rounded-full bg-[#17243B] text-white text-xs sm:text-sm font-semibold hover:bg-[#253754] transition-colors whitespace-nowrap inline-flex items-center justify-center"
+                >
+                  <span className="whitespace-nowrap">Send Another Inquiry</span>
+                </button>
               </div>
             ) : (
               <form onSubmit={handleSubmit} noValidate className="space-y-4">
@@ -174,7 +207,7 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                       placeholder="e.g. Atty. Miguel Ramos"
-                      className={`w-full px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
+                      className={`w-full min-h-[44px] px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
                         errors.fullName ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-slate-50/50'
                       }`}
                     />
@@ -195,7 +228,7 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="e.g. miguel.ramos@domain.com"
-                      className={`w-full px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
+                      className={`w-full min-h-[44px] px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
                         errors.email ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-slate-50/50'
                       }`}
                     />
@@ -211,14 +244,14 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                   {/* Phone */}
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Mobile / WhatsApp *
+                      Phone Number *
                     </label>
                     <input
                       type="tel"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder="+63 917 123 4567"
-                      className={`w-full px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
+                      className={`w-full min-h-[44px] px-4 py-2.5 rounded-xl border text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] ${
                         errors.phone ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-slate-50/50'
                       }`}
                     />
@@ -237,14 +270,13 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                     <select
                       value={propertyInterest}
                       onChange={(e) => setPropertyInterest(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
                     >
-                      <option value="The Alcoves">The Alcoves (Cebu Business Park)</option>
-                      <option value="38 Park Avenue">38 Park Avenue (IT Park)</option>
-                      <option value="Mactan Newtown Residences">Mactan Newtown Residences</option>
-                      <option value="Astra Centre">Astra Centre (Cebu Business Park)</option>
-                      <option value="Lucima Luxury Residences">Lucima Residences (CBP)</option>
-                      <option value="Banilad Estate Villa">Banilad Estate Villa</option>
+                      {propertyOptions.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
                       <option value="General Investment Consultation">General Luxury Investment</option>
                     </select>
                   </div>
@@ -267,10 +299,12 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-3.5 px-4 rounded-full bg-[#17243B] hover:bg-[#203150] text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50 whitespace-nowrap flex-nowrap"
+                  className="w-full min-h-[44px] py-3 px-4 rounded-full bg-[#17243B] hover:bg-[#203150] text-white font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50 whitespace-nowrap flex-nowrap"
                 >
                   <Send className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
-                  <span className="whitespace-nowrap">{isSubmitting ? 'Submitting Inquiry...' : 'Submit Inquiry & Request Brochure'}</span>
+                  <span className="whitespace-nowrap">
+                    {isSubmitting ? 'Submitting Inquiry...' : 'Submit Inquiry'}
+                  </span>
                 </button>
               </form>
             )}
@@ -280,3 +314,4 @@ export const ContactSection: React.FC<ContactSectionProps> = ({
     </section>
   );
 };
+

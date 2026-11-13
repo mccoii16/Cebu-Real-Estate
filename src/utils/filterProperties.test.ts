@@ -8,6 +8,9 @@ import {
   applyApprovalDecision,
   calculateAgentMetrics,
   canManagePropertyPhotos,
+  formatInquiryNotificationEmail,
+  isDuplicateBuildingName,
+  paginateItems,
 } from './filterProperties';
 import { PropertyDoc } from '../types/property';
 
@@ -221,4 +224,73 @@ test('generateInquiryId creates valid firestore document IDs', () => {
   assert.ok(/^[a-zA-Z0-9_\-]+$/.test(inquiryId));
   assert.ok(inquiryId.length > 0 && inquiryId.length <= 128);
 });
+
+test('formatInquiryNotificationEmail substitutes tokens and falls back to defaults', () => {
+  const rendered = formatInquiryNotificationEmail(
+    {
+      subject: 'Lead: {{clientName}} for {{property}}',
+      body: 'Client {{clientName}} ({{clientEmail}}, {{clientPhone}}) asked on {{date}} about {{property}}: {{message}}',
+    },
+    {
+      fullName: '  Juan Dela Cruz ',
+      email: 'juan@example.com',
+      phone: '+63 917 555 0100',
+      propertyInterest: 'The Alcoves Unit 18B',
+      message: 'Can I book a viewing this Friday?',
+      createdAt: '2026-05-01T08:30:00Z',
+    }
+  );
+
+  assert.equal(rendered.subject, 'Lead: Juan Dela Cruz for The Alcoves Unit 18B');
+  assert.ok(rendered.body.includes('Juan Dela Cruz (juan@example.com, +63 917 555 0100)'));
+  assert.ok(rendered.body.includes('Can I book a viewing this Friday?'));
+  assert.ok(!rendered.body.includes('{{'));
+
+  const fallback = formatInquiryNotificationEmail(
+    {},
+    {
+      fullName: 'Ana Reyes',
+      email: 'ana@example.com',
+      phone: '09171234567',
+    }
+  );
+  assert.ok(fallback.subject.includes('General Property Inquiry'));
+  assert.ok(fallback.subject.includes('Ana Reyes'));
+  assert.ok(fallback.body.includes('Ana Reyes'));
+  assert.ok(!fallback.body.includes('{{'));
+});
+
+test('isDuplicateBuildingName checks case-insensitively and excludes current building', () => {
+  const buildings = [
+    { buildingId: 'bld-1', buildingName: 'The Alcoves' },
+    { buildingId: 'bld-2', buildingName: '38 Park Avenue' },
+  ];
+
+  assert.equal(isDuplicateBuildingName(buildings, '  the alcoves  '), true);
+  assert.equal(isDuplicateBuildingName(buildings, 'The Alcoves', 'bld-1'), false);
+  assert.equal(isDuplicateBuildingName(buildings, 'Horizon 101'), false);
+  assert.equal(isDuplicateBuildingName(buildings, '   '), false);
+});
+
+test('paginateItems slices pages accurately and clamps out-of-range page numbers', () => {
+  const items = Array.from({ length: 25 }, (_, i) => i + 1);
+
+  const page1 = paginateItems(items, 1, 10);
+  assert.equal(page1.currentPage, 1);
+  assert.equal(page1.totalPages, 3);
+  assert.equal(page1.totalItems, 25);
+  assert.deepEqual(page1.items, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  const page3 = paginateItems(items, 3, 10);
+  assert.equal(page3.currentPage, 3);
+  assert.deepEqual(page3.items, [21, 22, 23, 24, 25]);
+
+  const clampedHigh = paginateItems(items, 99, 10);
+  assert.equal(clampedHigh.currentPage, 3);
+  assert.deepEqual(clampedHigh.items, [21, 22, 23, 24, 25]);
+
+  const clampedLow = paginateItems(items, 0, 10);
+  assert.equal(clampedLow.currentPage, 1);
+});
+
 

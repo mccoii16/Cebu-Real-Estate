@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   MapPin,
@@ -19,12 +19,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import { PropertyDoc } from '../types/property';
-import { formatPHP } from '../utils/filterProperties';
+import { formatPHP, canManagePropertyPhotos } from '../utils/filterProperties';
 import { uploadPropertyPhoto } from '../services/storageService';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
-import { canManagePropertyPhotos } from '../utils/filterProperties';
 
 interface PropertyModalProps {
   property: PropertyDoc | null;
@@ -51,15 +50,21 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    setActiveImageIndex(0);
+    setIsFullscreen(false);
+    setUploadError(null);
+  }, [property?.propertyId]);
+
   if (!property) return null;
 
   // Role Gate: strictly master authority (isSuperAdmin) or the agent who created this listing
   const canManagePhotos = canManagePropertyPhotos(user?.uid, isSuperAdmin, property);
 
-
-  const images = property.images && property.images.length > 0
-    ? property.images
-    : ['/assets/extracted/the_alcoves.png'];
+  const images =
+    property.images && property.images.length > 0
+      ? property.images
+      : ['/assets/extracted/the_alcoves.png'];
 
   const currentImage = images[activeImageIndex] || images[0];
 
@@ -162,22 +167,29 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="property-modal-title"
-        className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm p-4 sm:p-6 md:p-8 flex justify-center items-start"
+        className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm p-4 sm:p-8 flex justify-center items-center"
         onClick={onClose}
       >
         <div
-          className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-8 sm:my-12 flex flex-col max-h-[calc(100vh-4rem)] sm:max-h-[calc(100vh-6rem)]"
+          className="relative w-full max-w-3xl bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100 my-auto flex flex-col max-h-[calc(100vh-2.5rem)] sm:max-h-[calc(100vh-4.5rem)]"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header Media Banner with Multi-Image Gallery */}
           <div
             onClick={() => setIsFullscreen(true)}
             title="Click to view photo fullscreen"
-            className="relative w-full h-72 sm:h-96 bg-slate-950 overflow-hidden group flex-shrink-0 cursor-pointer"
+            className="relative w-full h-64 sm:h-96 bg-slate-950 overflow-hidden group flex-shrink-0 cursor-pointer"
           >
             <img
               src={currentImage}
               alt={property.propertyTitle}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.fallback) {
+                  target.dataset.fallback = 'true';
+                  target.src = '/assets/extracted/the_alcoves.png';
+                }
+              }}
               className="w-full h-full object-cover object-center group-hover:scale-105 transition-all duration-300"
               referrerPolicy="no-referrer"
             />
@@ -185,14 +197,14 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
 
             {/* Click to expand pill on hover */}
             <div className="absolute bottom-16 left-4 z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
-              <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md text-white text-xs font-medium flex items-center gap-1.5 border border-white/20">
-                <Maximize className="w-3.5 h-3.5 text-[#C6A878]" />
+              <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md text-white text-xs font-medium flex items-center gap-1.5 border border-white/20 whitespace-nowrap">
+                <Maximize className="w-3.5 h-3.5 text-[#C6A878] flex-shrink-0" />
                 <span>Click photo to expand fullscreen</span>
               </span>
             </div>
 
             {/* Top Right Action Cluster: Fullscreen & Close */}
-            <div className="absolute top-4 right-4 flex items-center gap-2 z-20" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 flex items-center gap-2 z-20" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => setIsFullscreen(true)}
@@ -204,6 +216,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={onClose}
                 aria-label="Close modal"
                 className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center transition-colors focus:outline-none"
@@ -216,22 +229,30 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
           {images.length > 1 && (
             <>
               <button
-                onClick={prevImage}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  prevImage();
+                }}
                 aria-label="Previous image"
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
               <button
-                onClick={nextImage}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  nextImage();
+                }}
                 aria-label="Next image"
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
 
               {/* Gallery Image Counter Badge */}
-              <div className="absolute top-4 left-4 z-20 px-3 py-1 rounded-full bg-black/60 text-white text-xs font-mono font-medium flex items-center gap-1.5 backdrop-blur-sm">
+              <div className="absolute top-3.5 left-3.5 sm:top-4 sm:left-4 z-20 px-3 py-1 rounded-full bg-black/60 text-white text-xs font-mono font-medium flex items-center gap-1.5 backdrop-blur-sm">
                 <ImageIcon className="w-3.5 h-3.5 text-[#C6A878]" />
                 <span>
                   {activeImageIndex + 1} / {images.length}
@@ -241,38 +262,38 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
           )}
 
           {/* Bottom Title & Price inside image banner */}
-          <div className="absolute bottom-4 left-6 right-6 flex items-end justify-between gap-4 z-10">
-            <div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="px-2.5 py-0.5 rounded-full bg-[#C6A878] text-[#17243B] text-[10px] font-bold uppercase tracking-wider">
+          <div className="absolute bottom-3.5 left-4 right-4 sm:bottom-4 sm:left-6 sm:right-6 flex flex-col sm:flex-row sm:items-end justify-between gap-2 sm:gap-4 z-10">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-1">
+                <span className="px-2.5 py-0.5 rounded-full bg-[#C6A878] text-[#17243B] text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
                   {property.listingType === 'sale' ? 'For Sale' : 'For Rent'}
                 </span>
-                <span className="text-white/80 text-xs font-medium">
+                <span className="text-white/80 text-xs font-medium whitespace-nowrap">
                   {property.propertyType}
                 </span>
                 {property.featured && (
-                  <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[9px] font-semibold uppercase tracking-wider">
+                  <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[9px] font-semibold uppercase tracking-wider whitespace-nowrap">
                     Featured
                   </span>
                 )}
               </div>
               <h2
                 id="property-modal-title"
-                className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight"
+                className="text-lg sm:text-3xl font-bold text-white tracking-tight leading-tight line-clamp-2"
               >
                 {property.propertyTitle}
               </h2>
               <div className="flex items-center gap-1.5 text-xs sm:text-sm text-white/90 mt-1">
-                <MapPin className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
-                <span>{property.address}</span>
+                <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#C6A878] flex-shrink-0" />
+                <span className="truncate">{property.address}</span>
               </div>
             </div>
 
-            <div className="text-right">
-              <span className="text-xs text-white/70 block uppercase tracking-wider">
+            <div className="sm:text-right flex-shrink-0">
+              <span className="text-[10px] sm:text-xs text-white/70 block uppercase tracking-wider">
                 Price
               </span>
-              <span className="text-xl sm:text-2xl font-bold text-[#C6A878] font-mono tabular-nums whitespace-nowrap">
+              <span className="text-lg sm:text-2xl font-bold text-[#C6A878] font-mono tabular-nums whitespace-nowrap">
                 {formatPHP(property.price, property.listingType === 'rent')}
               </span>
             </div>
@@ -303,11 +324,11 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         )}
 
         {/* Content Body */}
-        <div className="p-6 sm:p-8 space-y-6 overflow-y-auto max-h-[55vh]">
+        <div className="p-4 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto flex-1">
           {/* Key Metrics Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-4 px-5 rounded-2xl bg-[#F8F7F3] border border-slate-200">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3.5 px-4 sm:py-4 sm:px-5 rounded-2xl bg-[#F8F7F3] border border-slate-200">
             <div className="flex items-center gap-2.5">
-              <Bed className="w-4 h-4 text-[#C6A878]" />
+              <Bed className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
               <div>
                 <span className="text-[10px] uppercase text-slate-500 block font-semibold">Bedrooms</span>
                 <span className="text-sm font-bold text-slate-900">{property.bedrooms} Bed</span>
@@ -315,7 +336,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2.5">
-              <Bath className="w-4 h-4 text-[#C6A878]" />
+              <Bath className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
               <div>
                 <span className="text-[10px] uppercase text-slate-500 block font-semibold">Bathrooms</span>
                 <span className="text-sm font-bold text-slate-900">{property.bathrooms} Bath</span>
@@ -323,7 +344,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2.5">
-              <Maximize2 className="w-4 h-4 text-[#C6A878]" />
+              <Maximize2 className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
               <div>
                 <span className="text-[10px] uppercase text-slate-500 block font-semibold">Floor Area</span>
                 <span className="text-sm font-bold text-slate-900">{property.floorArea} sqm</span>
@@ -331,8 +352,8 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2.5">
-              <Building className="w-4 h-4 text-[#C6A878]" />
-              <div>
+              <Building className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
+              <div className="min-w-0">
                 <span className="text-[10px] uppercase text-slate-500 block font-semibold">Building</span>
                 <span className="text-sm font-bold text-slate-900 truncate block max-w-[120px]">
                   {property.buildingName}
@@ -355,7 +376,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
           {property.amenities && property.amenities.length > 0 && (
             <div>
               <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 mb-3">
-                Key Amenities & Highlights
+                Key Amenities &amp; Highlights
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {property.amenities.map((feature, i) => (
@@ -376,7 +397,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                    <Upload className="w-3.5 h-3.5 text-[#C6A878]" />
+                    <Upload className="w-3.5 h-3.5 text-[#C6A878] flex-shrink-0" />
                     <span>Manage Property Photographs</span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-0.5">
@@ -386,16 +407,16 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {images.length > 1 && (
                     <button
                       type="button"
                       disabled={isDeletingPhoto}
                       onClick={() => handleDeletePhoto(activeImageIndex)}
-                      className="px-3.5 py-2 rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      className="px-3.5 min-h-[40px] rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
                       title="Delete currently displayed photo"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
                       <span>{isDeletingPhoto ? 'Deleting...' : 'Delete Active Photo'}</span>
                     </button>
                   )}
@@ -412,16 +433,16 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                     type="button"
                     disabled={isUploading}
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2 rounded-full border border-[#17243B] text-[#17243B] hover:bg-[#17243B] hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+                    className="px-4 min-h-[40px] rounded-full border border-[#17243B] text-[#17243B] hover:bg-[#17243B] hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50 whitespace-nowrap"
                   >
                     {isUploading ? (
                       <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Uploading to Storage...</span>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                        <span>Uploading...</span>
                       </>
                     ) : (
                       <>
-                        <Upload className="w-3.5 h-3.5" />
+                        <Upload className="w-3.5 h-3.5 flex-shrink-0" />
                         <span>Add Photo</span>
                       </>
                     )}
@@ -435,7 +456,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </div>
           ) : (
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 text-xs flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-slate-400" />
+              <span className="w-2 h-2 rounded-full bg-slate-400 flex-shrink-0" />
               <span>
                 Photo management for this listing is restricted to {property.agentName || 'the assigned listing agent'} and the Master Administrator.
               </span>
@@ -445,8 +466,9 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
           {/* Actions Footer */}
           <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
             <button
+              type="button"
               onClick={() => onToggleFavorite(property.propertyId)}
-              className={`w-full sm:w-auto px-5 py-3 rounded-full border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap flex-nowrap shrink-0 ${
+              className={`w-full sm:w-auto px-5 min-h-[44px] rounded-full border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap flex-nowrap shrink-0 ${
                 isFavorite
                   ? 'border-[#C6A878] bg-[#C6A878]/10 text-[#C6A878]'
                   : 'border-slate-300 text-slate-700 hover:bg-slate-50'
@@ -457,11 +479,12 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 onInquireAboutProperty(property.propertyTitle);
                 onClose();
               }}
-              className="w-full sm:w-auto px-6 sm:px-7 py-3 rounded-full bg-[#17243B] hover:bg-[#203150] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md active:scale-[0.98] whitespace-nowrap flex-nowrap shrink-0"
+              className="w-full sm:w-auto px-6 sm:px-7 min-h-[44px] rounded-full bg-[#17243B] hover:bg-[#203150] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md active:scale-[0.98] whitespace-nowrap flex-nowrap shrink-0"
             >
               <span className="whitespace-nowrap">Inquire About This Property</span>
               <ArrowRight className="w-4 h-4 text-[#C6A878] flex-shrink-0" />

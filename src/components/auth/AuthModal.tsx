@@ -55,28 +55,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-[#17243B]/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md bg-[#17243B] text-white rounded-3xl shadow-2xl border border-white/15 overflow-hidden">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Staff and Agent Portal"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-[#17243B]/80 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto"
+    >
+      <div className="relative w-full max-w-md bg-[#17243B] text-white rounded-2xl sm:rounded-3xl shadow-2xl border border-white/15 overflow-hidden my-auto">
         {/* Subtle decorative glow */}
         <div className="absolute top-0 right-0 w-48 h-48 bg-[#C6A878]/15 rounded-full blur-3xl pointer-events-none" />
 
         {/* Modal Header */}
-        <div className="px-6 sm:px-8 pt-7 pb-4 flex items-start justify-between border-b border-white/10 relative z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#C6A878]/20 border border-[#C6A878]/30 flex items-center justify-center text-[#C6A878]">
+        <div className="px-5 sm:px-8 pt-6 sm:pt-7 pb-4 flex items-start justify-between border-b border-white/10 relative z-10">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-[#C6A878]/20 border border-[#C6A878]/30 flex items-center justify-center text-[#C6A878] flex-shrink-0">
               <Shield className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-xl font-serif font-bold text-white tracking-wide">
-                Staff & Agent Portal
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-serif font-bold text-white tracking-wide truncate">
+                Staff &amp; Agent Portal
               </h2>
-              <p className="text-xs text-white/60">Cebu Prime Properties Secure Gateway</p>
+              <p className="text-xs text-white/60 truncate">Cebu Prime Properties Secure Gateway</p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             aria-label="Close portal modal"
-            className="w-8 h-8 rounded-full border border-white/15 text-white/70 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors"
+            className="w-9 h-9 rounded-full border border-white/15 text-white/70 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors flex-shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
@@ -135,14 +141,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             </div>
           )}
 
-          {/* Quick Google Sign In (for Super Admin Martiligando@gmail.com) */}
+          {/* Quick Google Sign In */}
           <button
             type="button"
             onClick={handleGoogleSubmit}
             disabled={isSubmitting}
-            className="w-full py-3 px-4 rounded-xl bg-white hover:bg-slate-50 text-[#17243B] font-semibold text-sm flex items-center justify-center gap-3 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-60 mb-5"
+            className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-white hover:bg-slate-50 text-[#17243B] font-semibold text-xs sm:text-sm flex items-center justify-center gap-3 transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-60 mb-5 whitespace-nowrap"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -209,10 +215,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full mt-2 py-3 px-4 rounded-xl bg-[#C6A878] hover:bg-[#b89764] text-[#17243B] font-semibold text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-60 shadow-lg"
+              className="w-full mt-2 min-h-[44px] py-2.5 px-4 rounded-xl bg-[#C6A878] hover:bg-[#b89764] text-[#17243B] font-semibold text-xs sm:text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-60 shadow-lg whitespace-nowrap"
             >
               <span>{isSubmitting ? 'Authenticating...' : 'Sign In to Portal'}</span>
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-4 h-4 flex-shrink-0" />
             </button>
           </form>
 

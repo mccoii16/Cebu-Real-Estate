@@ -171,7 +171,11 @@ function MainApp() {
   };
 
   const handleBuildingAdded = (newBld: BuildingDoc) => {
-    setBuildings((prev) => [...prev, newBld]);
+    setBuildings((prev) =>
+      prev.some((b) => b.buildingId === newBld.buildingId)
+        ? prev.map((b) => (b.buildingId === newBld.buildingId ? newBld : b))
+        : [...prev, newBld]
+    );
   };
 
   const handleBuildingDeleted = (buildingId: string) => {
@@ -232,6 +236,7 @@ function MainApp() {
         <AgentDashboard
           properties={properties}
           buildings={buildings}
+          locations={locations}
           onPropertyUpdated={handlePropertyUpdated}
           onPropertyDeleted={handlePropertyDeleted}
           onViewPublicSite={() => setCurrentView('public')}
@@ -272,6 +277,7 @@ function MainApp() {
           onOpenPortal={handlePortalClick}
           userRole={isSuperAdmin ? 'superadmin' : isAgent ? 'agent' : null}
           userDisplayName={profile?.displayName || user?.displayName}
+          siteSettings={siteSettings}
         />
 
         <Hero
@@ -288,6 +294,7 @@ function MainApp() {
         filter={filter}
         onFilterChange={setFilter}
         onSearchExecute={handleSearchExecute}
+        locations={locations}
       />
 
       {/* Main Content Sections */}
@@ -316,11 +323,20 @@ function MainApp() {
         <AboutSection />
 
         {/* Private Client Inquiries & Contact Form */}
-        <ContactSection initialPropertyInterest={inquiryPropertyTitle} />
+        <ContactSection
+          initialPropertyInterest={inquiryPropertyTitle}
+          properties={approvedListings}
+          siteSettings={siteSettings}
+        />
       </main>
 
       {/* Footer */}
-      <Footer onNavClick={handleTabChange} />
+      <Footer
+        onNavClick={handleTabChange}
+        onSelectLocation={handleLocationSelect}
+        locations={locations}
+        siteSettings={siteSettings}
+      />
 
       {/* All Properties Gallery & Filter View */}
       <AllPropertiesView
@@ -328,6 +344,7 @@ function MainApp() {
         onClose={() => setAllPropertiesViewOpen(false)}
         properties={filteredApproved}
         buildings={buildings}
+        locations={locations}
         filter={filter}
         onFilterChange={setFilter}
         onResetFilter={() => setFilter(DEFAULT_FILTER)}
@@ -351,6 +368,8 @@ function MainApp() {
         isOpen={inquiryModalOpen}
         onClose={() => setInquiryModalOpen(false)}
         defaultProperty={inquiryPropertyTitle}
+        properties={approvedListings}
+        siteSettings={siteSettings}
       />
 
       {/* Search Overlay Modal */}

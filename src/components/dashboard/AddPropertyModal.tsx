@@ -16,7 +16,7 @@ import {
   FileText,
   Image as ImageIcon,
 } from 'lucide-react';
-import { PropertyDoc, BuildingDoc, PropertyType, ListingType, PropertyLocation } from '../../types/property';
+import { PropertyDoc, BuildingDoc, PropertyType, ListingType, PropertyLocation, LocationHighlight } from '../../types/property';
 import { uploadPropertyPhoto } from '../../services/storageService';
 import { useAuth } from '../../context/AuthContext';
 import { doc, setDoc, updateDoc } from 'firebase/firestore';
@@ -28,6 +28,8 @@ interface AddPropertyModalProps {
   onSaved: (property: PropertyDoc) => void;
   editingProperty?: PropertyDoc | null;
   buildings: BuildingDoc[];
+  locations?: LocationHighlight[];
+  isSuperAdmin?: boolean;
 }
 
 const COMMON_AMENITIES = [
@@ -46,7 +48,7 @@ const COMMON_AMENITIES = [
   'Backup Generator Power',
 ];
 
-const LOCATIONS_LIST: PropertyLocation[] = [
+const FALLBACK_LOCATIONS: PropertyLocation[] = [
   'Cebu Business Park',
   'Cebu IT Park',
   'Mactan Newtown',
@@ -63,8 +65,19 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
   onSaved,
   editingProperty,
   buildings,
+  locations,
+  isSuperAdmin = false,
 }) => {
   const { user, profile } = useAuth();
+
+  const locationOptions = React.useMemo(() => {
+    const dynamic = locations && locations.length > 0 ? locations.map((l) => l.name) : [];
+    const base = [...dynamic, ...FALLBACK_LOCATIONS];
+    if (editingProperty?.location) {
+      base.push(editingProperty.location);
+    }
+    return Array.from(new Set(base));
+  }, [locations, editingProperty?.location]);
 
   const [propertyTitle, setPropertyTitle] = useState('');
   const [buildingId, setBuildingId] = useState('');
@@ -187,7 +200,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
     setImages((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSave = async (submitStatus: 'draft' | 'pending') => {
+  const handleSave = async (submitStatus: 'draft' | 'pending' | 'approved') => {
     setErrorMessage(null);
 
     if (!propertyTitle.trim()) {
@@ -208,8 +221,8 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
       const propId = editingProperty?.propertyId || `prop-${Date.now()}`;
       const now = new Date().toISOString();
 
-      // Check if editing an approved property
-      if (editingProperty && editingProperty.status === 'approved' && submitStatus === 'pending') {
+      // Check if an agent (non-superadmin) is editing an approved property
+      if (!isSuperAdmin && editingProperty && editingProperty.status === 'approved' && submitStatus === 'pending') {
         // Special case: Preserve live approved listing and submit revisions for Super Admin review
         const pendingChanges: Partial<PropertyDoc> = {
           propertyTitle,
@@ -248,7 +261,8 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
         return;
       }
 
-      // Normal creation or editing draft / rejected
+      // Normal creation or Super Admin direct save / Agent draft/pending save
+      const resolvedStatus = isSuperAdmin ? submitStatus : submitStatus === 'approved' ? 'pending' : submitStatus;
       const propertyData: PropertyDoc = {
         propertyId: propId,
         buildingId: buildingId || `bld-${Date.now()}`,
@@ -266,15 +280,24 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
         amenities,
         images,
         featured: editingProperty?.featured ?? false,
-        status: submitStatus,
+        status: resolvedStatus,
         agentId: editingProperty?.agentId || user?.uid || 'agent-01',
         agentName: editingProperty?.agentName || profile?.displayName || user?.email?.split('@')[0] || 'Prime Agent',
         rejectionReason: null,
         createdAt: editingProperty?.createdAt || now,
         updatedAt: now,
-        submittedAt: submitStatus === 'pending' ? now : editingProperty?.submittedAt || null,
-        approvedAt: editingProperty?.approvedAt || null,
-        approvedBy: editingProperty?.approvedBy || null,
+        submittedAt:
+          resolvedStatus === 'pending' || resolvedStatus === 'approved'
+            ? editingProperty?.submittedAt || now
+            : editingProperty?.submittedAt || null,
+        approvedAt:
+          resolvedStatus === 'approved'
+            ? editingProperty?.approvedAt || now
+            : editingProperty?.approvedAt || null,
+        approvedBy:
+          resolvedStatus === 'approved'
+            ? editingProperty?.approvedBy || user?.email || 'admin-super'
+            : editingProperty?.approvedBy || null,
         hasPendingReview: false,
       };
 
@@ -320,7 +343,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 sm:p-8 overflow-y-auto space-y-6 flex-1 bg-[#F8F7F3]">
+        <div className="p-4 sm:p-8 overflow-y-auto space-y-5 sm:space-y-6 flex-1 bg-[#F8F7F3]">
           {errorMessage && (
             <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-start gap-3">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-500" />
@@ -329,10 +352,10 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
           )}
 
           {/* Section 1: Basic Identifiers */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
             <h3 className="text-sm font-bold text-[#17243B] uppercase tracking-wider flex items-center gap-2">
               <Building className="w-4 h-4 text-[#C6A878]" />
-              <span>Listing Identity & Location</span>
+              <span>Listing Identity &amp; Location</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -345,7 +368,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
                   value={propertyTitle}
                   onChange={(e) => setPropertyTitle(e.target.value)}
                   placeholder="e.g. The Alcoves - High Floor Skyline Suite"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                  className="w-full h-11 px-3.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
                   required
                 />
               </div>
@@ -357,7 +380,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
                 <select
                   value={buildingId}
                   onChange={handleBuildingSelect}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                  className="w-full h-11 px-3.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
                 >
                   <option value="">-- Choose Existing Building or Custom --</option>
                   {buildings.map((b) => (
@@ -377,9 +400,9 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
                 <select
                   value={location}
                   onChange={(e) => setLocation(e.target.value as PropertyLocation)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                  className="w-full h-11 px-3.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
                 >
-                  {LOCATIONS_LIST.map((loc) => (
+                  {locationOptions.map((loc) => (
                     <option key={loc} value={loc}>
                       {loc}
                     </option>
@@ -592,16 +615,16 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
           </div>
 
           {/* Section 4: Property Photographs (Firebase Storage Upload & Reordering) */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-[#17243B] uppercase tracking-wider flex items-center gap-2">
-                <ImageIcon className="w-4 h-4 text-[#C6A878]" />
+                <ImageIcon className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
                 <span>Property Photographs ({images.length})</span>
               </h3>
 
-              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#C6A878] hover:bg-[#b89764] text-[#17243B] text-xs font-semibold transition-colors">
-                <Upload className="w-3.5 h-3.5" />
-                <span>{isUploading ? 'Uploading to Storage...' : 'Upload Photos'}</span>
+              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl bg-[#C6A878] hover:bg-[#b89764] text-[#17243B] text-xs font-semibold transition-colors whitespace-nowrap flex-shrink-0">
+                <Upload className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{isUploading ? 'Uploading...' : 'Upload Photos'}</span>
                 <input
                   type="file"
                   multiple
@@ -629,19 +652,19 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
 
                     {/* Primary Badge for index 0 */}
                     {idx === 0 && (
-                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#17243B]/80 text-[#C6A878] text-[10px] font-bold backdrop-blur-sm">
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#17243B]/80 text-[#C6A878] text-[10px] font-bold backdrop-blur-sm whitespace-nowrap">
                         Primary Cover
                       </span>
                     )}
 
                     {/* Hover Overlay Controls */}
-                    <div className="absolute inset-0 bg-[#17243B]/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-2">
+                    <div className="absolute inset-0 bg-[#17243B]/60 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-2">
                       {idx > 0 && (
                         <button
                           type="button"
                           onClick={() => moveImage(idx, 'up')}
                           title="Move earlier"
-                          className="w-7 h-7 rounded-lg bg-white/20 hover:bg-white text-white hover:text-[#17243B] flex items-center justify-center transition-colors"
+                          className="w-8 h-8 rounded-lg bg-white/25 hover:bg-white text-white hover:text-[#17243B] flex items-center justify-center transition-colors"
                         >
                           <ArrowUp className="w-3.5 h-3.5" />
                         </button>
@@ -652,7 +675,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
                           type="button"
                           onClick={() => moveImage(idx, 'down')}
                           title="Move later"
-                          className="w-7 h-7 rounded-lg bg-white/20 hover:bg-white text-white hover:text-[#17243B] flex items-center justify-center transition-colors"
+                          className="w-8 h-8 rounded-lg bg-white/25 hover:bg-white text-white hover:text-[#17243B] flex items-center justify-center transition-colors"
                         >
                           <ArrowDown className="w-3.5 h-3.5" />
                         </button>
@@ -662,7 +685,7 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
                         type="button"
                         onClick={() => removeImage(idx)}
                         title="Remove photo"
-                        className="w-7 h-7 rounded-lg bg-rose-500/80 hover:bg-rose-600 text-white flex items-center justify-center transition-colors"
+                        className="w-8 h-8 rounded-lg bg-rose-500/85 hover:bg-rose-600 text-white flex items-center justify-center transition-colors"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -680,44 +703,55 @@ export const AddPropertyModal: React.FC<AddPropertyModalProps> = ({
         </div>
 
         {/* Modal Footer Actions */}
-        <div className="px-6 py-4 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 flex-shrink-0">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2.5 sm:gap-3 flex-shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="w-full sm:w-auto px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50 text-sm font-semibold transition-colors"
+            className="w-full sm:w-auto px-5 min-h-[44px] rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
           >
             Cancel
           </button>
 
-          <div className="w-full sm:w-auto flex items-center gap-3">
-            {/* Save as Draft (Only allowed if not already approved) */}
-            {(!editingProperty || editingProperty.status !== 'approved') && (
+          <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-2.5 sm:gap-3">
+            {/* Save as Draft (Allowed if Super Admin or not yet approved) */}
+            {(isSuperAdmin || !editingProperty || editingProperty.status !== 'approved') && (
               <button
                 type="button"
                 onClick={() => handleSave('draft')}
                 disabled={isSaving || isUploading}
-                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold transition-colors disabled:opacity-50"
+                className="w-full sm:w-auto px-5 min-h-[44px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-semibold transition-colors disabled:opacity-50 whitespace-nowrap"
               >
                 Save as Draft
               </button>
             )}
 
-            {/* Submit for Approval */}
-            <button
-              type="button"
-              onClick={() => handleSave('pending')}
-              disabled={isSaving || isUploading}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#17243B] hover:bg-[#203250] text-[#C6A878] text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <Check className="w-4 h-4" />
-              <span>
-                {isSaving
-                  ? 'Saving...'
-                  : editingProperty && editingProperty.status === 'approved'
-                  ? 'Submit Changes for Review'
-                  : 'Submit for Approval'}
-              </span>
-            </button>
+            {isSuperAdmin ? (
+              <button
+                type="button"
+                onClick={() => handleSave('approved')}
+                disabled={isSaving || isUploading}
+                className="w-full sm:w-auto px-6 min-h-[44px] rounded-xl bg-[#17243B] hover:bg-[#203250] text-[#C6A878] text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <Check className="w-4 h-4 flex-shrink-0" />
+                <span>{isSaving ? 'Publishing...' : 'Publish Live (Approved)'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleSave('pending')}
+                disabled={isSaving || isUploading}
+                className="w-full sm:w-auto px-6 min-h-[44px] rounded-xl bg-[#17243B] hover:bg-[#203250] text-[#C6A878] text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <Check className="w-4 h-4 flex-shrink-0" />
+                <span>
+                  {isSaving
+                    ? 'Saving...'
+                    : editingProperty && editingProperty.status === 'approved'
+                    ? 'Submit Changes for Review'
+                    : 'Submit for Approval'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>

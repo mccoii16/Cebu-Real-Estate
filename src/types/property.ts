@@ -117,6 +117,9 @@ export interface InquiryDoc extends InquiryFormData {
   inquiryId: string;
   status: 'new' | 'contacted' | 'closed' | 'archived';
   createdAt: string;
+  recipientEmail?: string;
+  notificationSubject?: string;
+  notificationMessage?: string;
 }
 
 export interface HeroSlideConfig {
@@ -144,6 +147,10 @@ export interface WebsiteSettings {
   heroImages?: string[];
   heroSlides?: HeroSlideConfig[];
   aboutImage?: string;
+  inquiryNotificationEmail?: string;
+  inquiryNotificationSubject?: string;
+  inquiryEmailTemplate?: string;
+  inquiryAutoReplyMessage?: string;
   updatedAt?: string;
   updatedBy?: string;
 }

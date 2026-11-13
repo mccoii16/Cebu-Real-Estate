@@ -37,8 +37,9 @@ import {
   Phone,
   Layers,
   Upload,
-  MessageCircle,
   ArrowRight,
+  ChevronLeft,
+  Send,
 } from 'lucide-react';
 import {
   PropertyDoc,
@@ -51,10 +52,10 @@ import {
 } from '../../types/property';
 import { useAuth } from '../../context/AuthContext';
 import { AddPropertyModal } from './AddPropertyModal';
-import { doc, updateDoc, deleteDoc, addDoc, collection, setDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, updateDoc, deleteDoc, setDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../../services/firebase';
-import { getWebsiteSettings, saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS } from '../../services/settingsService';
-import { getAllLocations, saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
+import { saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS, getWebsiteSettings } from '../../services/settingsService';
+import { saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
 import { uploadSiteAsset } from '../../services/storageService';
 import { createAgentFirebaseAuthUser } from '../../services/agentAuthService';
 import {
@@ -62,6 +63,13 @@ import {
   updateInquiryStatus as updateInquiryStatusService,
   deleteInquiry as deleteInquiryService,
 } from '../../services/inquiryService';
+import {
+  DEFAULT_INQUIRY_EMAIL_SUBJECT,
+  DEFAULT_INQUIRY_EMAIL_BODY,
+  formatInquiryNotificationEmail,
+  isDuplicateBuildingName,
+  paginateItems,
+} from '../../utils/filterProperties';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -136,6 +144,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   // Property Filters & Actions
   const [propertySearch, setPropertySearch] = useState('');
   const [propertyStatusFilter, setPropertyStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected' | 'draft'>('all');
+  const [adminPropsPage, setAdminPropsPage] = useState(1);
   const [editingProperty, setEditingProperty] = useState<PropertyDoc | null>(null);
   const [isAddPropertyOpen, setIsAddPropertyOpen] = useState(false);
 
@@ -152,16 +161,26 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const [newBuildingLocation, setNewBuildingLocation] = useState('Cebu Business Park');
   const [newBuildingAddress, setNewBuildingAddress] = useState('');
   const [newBuildingDescription, setNewBuildingDescription] = useState('');
+  const [newBuildingImage, setNewBuildingImage] = useState('/assets/extracted/the_alcoves.png');
+  const [isUploadingBuildingImg, setIsUploadingBuildingImg] = useState(false);
+  const [buildingError, setBuildingError] = useState<string | null>(null);
   const [viewingBuildingProperties, setViewingBuildingProperties] = useState<BuildingDoc | null>(null);
 
   // Inquiries State
   const [inquiries, setInquiries] = useState<InquiryDoc[]>([]);
   const [inquiryStatusUpdating, setInquiryStatusUpdating] = useState<string | null>(null);
+  const [viewingInquiryEmail, setViewingInquiryEmail] = useState<InquiryDoc | null>(null);
 
   // Settings State
-  const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(DEFAULT_WEBSITE_SETTINGS);
+  const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(
+    initialSettings || DEFAULT_WEBSITE_SETTINGS
+  );
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    setAdminPropsPage(1);
+  }, [propertySearch, propertyStatusFilter]);
 
   // Fetch agents list from Firestore and backend
   const loadAgents = async () => {
@@ -467,6 +486,32 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
+  // Inline Status Change (Super Admin)
+  const handleChangePropertyStatus = async (
+    property: PropertyDoc,
+    newStatus: PropertyDoc['status']
+  ) => {
+    try {
+      const now = new Date().toISOString();
+      const payload: Partial<PropertyDoc> = {
+        status: newStatus,
+        updatedAt: now,
+        ...(newStatus === 'approved'
+          ? {
+              approvedAt: property.approvedAt || now,
+              approvedBy: user?.email || 'admin-super',
+              rejectionReason: null,
+              hasPendingReview: false,
+            }
+          : {}),
+      };
+      await updateDoc(doc(db, 'properties', property.propertyId), payload as any);
+      onPropertyUpdated({ ...property, ...payload });
+    } catch (err: any) {
+      alert(`Could not update property status: ${err.message}`);
+    }
+  };
+
   // Delete Property
   const handleDeleteProperty = async (propertyId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -661,27 +706,56 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
+  // Upload Building Image
+  const handleBuildingImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingBuildingImg(true);
+    setBuildingError(null);
+    try {
+      const res = await uploadSiteAsset(file, 'buildings');
+      setNewBuildingImage(res.url);
+    } catch (err: any) {
+      setBuildingError(`Upload failed: ${err.message || 'Check Storage permissions.'}`);
+    } finally {
+      setIsUploadingBuildingImg(false);
+    }
+  };
+
   // Add or Edit Building
   const handleAddBuilding = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBuildingName.trim()) return;
+    setBuildingError(null);
+    if (!newBuildingName.trim()) {
+      setBuildingError('Building name is required.');
+      return;
+    }
+
+    if (isDuplicateBuildingName(buildings, newBuildingName, editingBuilding?.buildingId)) {
+      setBuildingError(`A building named "${newBuildingName.trim()}" already exists.`);
+      return;
+    }
+
+    const coverImage = newBuildingImage.trim() || '/assets/extracted/the_alcoves.png';
 
     try {
       if (editingBuilding) {
-        // Edit existing building
         const updatedDoc: BuildingDoc = {
           ...editingBuilding,
           buildingName: newBuildingName.trim(),
           location: newBuildingLocation,
           address: newBuildingAddress.trim(),
           description: newBuildingDescription.trim() || 'A premier development in Cebu.',
+          buildingImages: [
+            coverImage,
+            ...(editingBuilding.buildingImages || []).filter((img) => img !== coverImage).slice(0, 4),
+          ],
           updatedAt: new Date().toISOString(),
         };
 
         await updateDoc(doc(db, 'buildings', editingBuilding.buildingId), updatedDoc as any);
         onBuildingAdded(updatedDoc);
       } else {
-        // Add new building
         const bldId = `bld-${Date.now()}`;
         const buildingDoc: BuildingDoc = {
           buildingId: bldId,
@@ -689,7 +763,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           location: newBuildingLocation,
           address: newBuildingAddress.trim(),
           description: newBuildingDescription.trim() || 'A premier development in Cebu.',
-          buildingImages: ['/assets/extracted/the_alcoves.png'],
+          buildingImages: [coverImage],
           amenities: ['24/7 Concierge', 'Elevators', 'Swimming Pool', 'Security'],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -704,43 +778,47 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       setNewBuildingName('');
       setNewBuildingAddress('');
       setNewBuildingDescription('');
+      setNewBuildingImage('/assets/extracted/the_alcoves.png');
     } catch (err: any) {
-      alert(`Could not save building: ${err.message}`);
+      setBuildingError(`Could not save building: ${err.message}`);
     }
   };
 
   return (
     <div className="min-h-screen bg-[#F8F7F3] flex flex-col selection:bg-[#C6A878]/30">
       {/* Top Navbar */}
-      <header className="bg-[#17243B] text-white px-4 sm:px-8 py-3.5 flex items-center justify-between border-b border-white/10 sticky top-0 z-30">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[#C6A878]/20 border border-[#C6A878]/40 flex items-center justify-center text-[#C6A878]">
+      <header className="bg-[#17243B] text-white px-3 sm:px-8 py-3.5 flex items-center justify-between gap-2 border-b border-white/10 sticky top-0 z-30">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-[#C6A878]/20 border border-[#C6A878]/40 flex items-center justify-center text-[#C6A878] flex-shrink-0">
             <Shield className="w-5 h-5" />
           </div>
-          <div>
-            <h1 className="text-base sm:text-lg font-bold font-serif tracking-wide text-white">
-              Cebu Prime • Super Admin Control Center
+          <div className="min-w-0">
+            <h1 className="text-sm sm:text-lg font-bold font-serif tracking-wide text-white truncate">
+              Cebu Prime • Super Admin
             </h1>
-            <p className="text-xs text-[#C6A878]">
+            <p className="text-[11px] sm:text-xs text-[#C6A878] truncate">
               {profile?.displayName || 'Martiligando@gmail.com'} (Master Authority)
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
           <button
+            type="button"
             onClick={onViewPublicSite}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/80 hover:text-white hover:bg-white/10 text-xs font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 min-h-[40px] rounded-lg border border-white/20 text-white/80 hover:text-white hover:bg-white/10 text-[11px] sm:text-xs font-medium transition-colors whitespace-nowrap"
           >
-            <span>Public Website</span>
-            <ExternalLink className="w-3.5 h-3.5" />
+            <span className="hidden xs:inline sm:inline">Public Website</span>
+            <span className="xs:hidden sm:hidden">Site</span>
+            <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
           </button>
 
           <button
+            type="button"
             onClick={signOut}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-xs font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 min-h-[40px] rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 text-[11px] sm:text-xs font-medium transition-colors whitespace-nowrap"
           >
-            <LogOut className="w-3.5 h-3.5" />
+            <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
             <span className="hidden sm:inline">Sign Out</span>
           </button>
         </div>
@@ -749,38 +827,40 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       {/* Main Layout: Navy Sidebar + Ivory Main Content */}
       <div className="flex-1 flex flex-col md:flex-row">
         {/* Navy Sidebar */}
-        <aside className="w-full md:w-64 bg-[#17243B] text-white flex-shrink-0 p-4 border-r border-white/10 flex flex-row md:flex-col gap-2 overflow-x-auto">
+        <aside className="w-full md:w-64 bg-[#17243B] text-white flex-shrink-0 p-3 sm:p-4 border-b md:border-b-0 md:border-r border-white/10 flex flex-row md:flex-col gap-2 overflow-x-auto">
           <div className="hidden md:block px-3 py-2 text-[10px] uppercase font-bold text-white/50 tracking-wider">
             Management Modules
           </div>
 
           {/* 1. Overview */}
           <button
+            type="button"
             onClick={() => setActiveSection('overview')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'overview'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <TrendingUp className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 flex-shrink-0" />
               <span>Overview</span>
             </div>
-            <span className="text-[10px] opacity-75">KPIs</span>
+            <span className="hidden md:inline text-[10px] opacity-75">KPIs</span>
           </button>
 
           {/* 2. Properties */}
           <button
+            type="button"
             onClick={() => setActiveSection('properties')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'properties'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <Building className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <Building className="w-4 h-4 flex-shrink-0" />
               <span>Properties</span>
             </div>
             <span className="text-[10px] opacity-75">{properties.length}</span>
@@ -788,15 +868,16 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
           {/* 3. Pending Approvals */}
           <button
+            type="button"
             onClick={() => setActiveSection('approvals')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'approvals'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <Clock className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 flex-shrink-0" />
               <span>Pending Approvals</span>
             </div>
             {pendingApprovals.length > 0 && (
@@ -808,15 +889,16 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
           {/* 4. Buildings */}
           <button
+            type="button"
             onClick={() => setActiveSection('buildings')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'buildings'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <Layers className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 flex-shrink-0" />
               <span>Buildings</span>
             </div>
             <span className="text-[10px] opacity-75">{buildings.length}</span>
@@ -824,31 +906,33 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
           {/* 5. Locations */}
           <button
+            type="button"
             onClick={() => setActiveSection('locations')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'locations'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <MapPin className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 flex-shrink-0" />
               <span>Locations</span>
             </div>
-            <span className="text-[10px] opacity-75">8 Districts</span>
+            <span className="text-[10px] opacity-75">{locationsList.length}</span>
           </button>
 
           {/* 6. Agents */}
           <button
+            type="button"
             onClick={() => setActiveSection('agents')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'agents'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <Users className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 flex-shrink-0" />
               <span>Agents</span>
             </div>
             <span className="text-[10px] opacity-75">{agents.length}</span>
@@ -856,39 +940,41 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
           {/* 7. Customer Inquiries */}
           <button
+            type="button"
             onClick={() => setActiveSection('inquiries')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'inquiries'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <MessageSquare className="w-4 h-4" />
-              <span>Customer Inquiries</span>
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 flex-shrink-0" />
+              <span>Inquiries</span>
             </div>
             <span className="text-[10px] opacity-75">{inquiries.length}</span>
           </button>
 
           {/* 8. Website Settings */}
           <button
+            type="button"
             onClick={() => setActiveSection('settings')}
-            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors whitespace-nowrap ${
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
               activeSection === 'settings'
                 ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
                 : 'text-white/80 hover:text-white hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center gap-2.5">
-              <SlidersHorizontal className="w-4 h-4" />
-              <span>Website Settings</span>
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-4 h-4 flex-shrink-0" />
+              <span>Settings</span>
             </div>
-            <span className="text-[10px] opacity-75">Brand</span>
+            <span className="hidden md:inline text-[10px] opacity-75">Brand</span>
           </button>
         </aside>
 
         {/* Ivory Main Content Area */}
-        <main className="flex-1 p-4 sm:p-8 max-w-7xl w-full mx-auto space-y-6">
+        <main className="flex-1 p-3 sm:p-8 max-w-7xl w-full mx-auto space-y-5 sm:space-y-6 min-w-0">
           {/* New Inquiries Quick Notice Banner */}
           {inquiries.filter((i) => i.status === 'new').length > 0 && activeSection !== 'inquiries' && (
             <div className="bg-gradient-to-r from-amber-500/10 via-[#C6A878]/15 to-amber-500/10 border border-[#C6A878]/50 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
@@ -1025,130 +1111,149 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           )}
 
           {/* SECTION 2: ALL PROPERTIES */}
-          {activeSection === 'properties' && (
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
-                    Portfolio Properties Directory
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Complete oversight of all Cebu properties, across all agents and publication states.
-                  </p>
+          {activeSection === 'properties' && (() => {
+            const filteredAdminProperties = properties.filter((p) => {
+              if (propertyStatusFilter !== 'all' && p.status !== propertyStatusFilter) return false;
+              if (propertySearch) {
+                const q = propertySearch.toLowerCase();
+                return (
+                  p.propertyTitle.toLowerCase().includes(q) ||
+                  p.location.toLowerCase().includes(q) ||
+                  p.buildingName.toLowerCase().includes(q)
+                );
+              }
+              return true;
+            });
+            const pagedAdminProps = paginateItems(filteredAdminProperties, adminPropsPage, 10);
+
+            return (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
+                      Portfolio Properties Directory
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Complete oversight of all Cebu properties, across all agents and publication states.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingProperty(null);
+                      setIsAddPropertyOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-4 min-h-[42px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>Add Property as Admin</span>
+                  </button>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setEditingProperty(null);
-                    setIsAddPropertyOpen(true);
-                  }}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Property as Admin</span>
-                </button>
-              </div>
+                {/* Filters Bar */}
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="relative w-full sm:w-80">
+                    <input
+                      type="text"
+                      value={propertySearch}
+                      onChange={(e) => setPropertySearch(e.target.value)}
+                      placeholder="Search properties, towers, locations..."
+                      className="w-full h-10 px-3.5 pl-9 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                    />
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  </div>
 
-              {/* Filters Bar */}
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div className="relative w-full sm:w-80">
-                  <input
-                    type="text"
-                    value={propertySearch}
-                    onChange={(e) => setPropertySearch(e.target.value)}
-                    placeholder="Search properties, towers, locations..."
-                    className="w-full px-3.5 py-2 pl-9 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
-                  />
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto text-xs pb-1 sm:pb-0">
+                    {(['all', 'approved', 'pending', 'rejected', 'draft'] as const).map((s) => (
+                      <button
+                        type="button"
+                        key={s}
+                        onClick={() => setPropertyStatusFilter(s)}
+                        className={`px-3.5 min-h-[36px] rounded-full font-semibold capitalize transition-colors whitespace-nowrap flex-shrink-0 ${
+                          propertyStatusFilter === s
+                            ? 'bg-[#17243B] text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto text-xs">
-                  {(
-                    ['all', 'approved', 'pending', 'rejected', 'draft'] as const
-                  ).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setPropertyStatusFilter(s)}
-                      className={`px-3 py-1.5 rounded-full font-semibold capitalize transition-colors ${
-                        propertyStatusFilter === s
-                          ? 'bg-[#17243B] text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Minimalist Properties Table */}
-              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-slate-700">
-                    <thead className="bg-[#17243B] text-white uppercase text-[10px] tracking-wider">
-                      <tr>
-                        <th className="px-5 py-3.5">Property</th>
-                        <th className="px-4 py-3.5">Location</th>
-                        <th className="px-4 py-3.5">Price (PHP)</th>
-                        <th className="px-4 py-3.5">Agent</th>
-                        <th className="px-4 py-3.5">Status</th>
-                        <th className="px-4 py-3.5 text-center">Featured</th>
-                        <th className="px-5 py-3.5 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {properties
-                        .filter((p) => {
-                          if (propertyStatusFilter !== 'all' && p.status !== propertyStatusFilter)
-                            return false;
-                          if (propertySearch) {
-                            const q = propertySearch.toLowerCase();
-                            return (
-                              p.propertyTitle.toLowerCase().includes(q) ||
-                              p.location.toLowerCase().includes(q) ||
-                              p.buildingName.toLowerCase().includes(q)
-                            );
-                          }
-                          return true;
-                        })
-                        .map((prop) => (
+                {/* Properties Table */}
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-700">
+                      <thead className="bg-[#17243B] text-white uppercase text-[10px] tracking-wider">
+                        <tr>
+                          <th className="px-5 py-3.5">Property</th>
+                          <th className="px-4 py-3.5">Location</th>
+                          <th className="px-4 py-3.5">Price (PHP)</th>
+                          <th className="px-4 py-3.5">Agent</th>
+                          <th className="px-4 py-3.5">Status</th>
+                          <th className="px-4 py-3.5 text-center">Featured</th>
+                          <th className="px-5 py-3.5 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {pagedAdminProps.items.map((prop) => (
                           <tr key={prop.propertyId} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-5 py-3 font-semibold text-slate-900 flex items-center gap-3">
-                              <img
-                                src={prop.images[0] || '/assets/extracted/photo_the_alcoves.png'}
-                                alt=""
-                                className="w-10 h-8 rounded-lg object-cover"
-                              />
-                              <div>
-                                <span className="font-bold">{prop.propertyTitle}</span>
-                                <span className="block text-[10px] text-slate-400">
-                                  {prop.buildingName}
-                                </span>
+                            <td className="px-5 py-3 font-semibold text-slate-900">
+                              <div className="flex items-center gap-3">
+                                <img
+                                  src={prop.images[0] || '/assets/extracted/photo_the_alcoves.png'}
+                                  alt=""
+                                  className="w-10 h-8 rounded-lg object-cover flex-shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <span className="font-bold block truncate max-w-[200px]">
+                                    {prop.propertyTitle}
+                                  </span>
+                                  <span className="block text-[10px] text-slate-400 truncate max-w-[200px]">
+                                    {prop.buildingName}
+                                  </span>
+                                </div>
                               </div>
                             </td>
-                            <td className="px-4 py-3">{prop.location}</td>
-                            <td className="px-4 py-3 font-medium">₱{prop.price.toLocaleString()}</td>
-                            <td className="px-4 py-3 text-slate-500">{prop.agentName}</td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
+                            <td className="px-4 py-3 whitespace-nowrap">{prop.location}</td>
+                            <td className="px-4 py-3 font-medium whitespace-nowrap">
+                              ₱{prop.price.toLocaleString()}
+                            </td>
+                            <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{prop.agentName}</td>
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <select
+                                aria-label={`Status for ${prop.propertyTitle}`}
+                                value={prop.status}
+                                onChange={(e) =>
+                                  handleChangePropertyStatus(
+                                    prop,
+                                    e.target.value as PropertyDoc['status']
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase border focus:outline-none cursor-pointer ${
                                   prop.status === 'approved'
-                                    ? 'bg-emerald-100 text-emerald-800'
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
                                     : prop.status === 'pending'
-                                    ? 'bg-amber-100 text-amber-800'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-200'
                                     : prop.status === 'rejected'
-                                    ? 'bg-rose-100 text-rose-800'
-                                    : 'bg-slate-100 text-slate-700'
+                                    ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                    : 'bg-slate-100 text-slate-700 border-slate-200'
                                 }`}
                               >
-                                {prop.status}
-                              </span>
+                                <option value="approved">approved</option>
+                                <option value="pending">pending</option>
+                                <option value="rejected">rejected</option>
+                                <option value="draft">draft</option>
+                              </select>
                             </td>
                             <td className="px-4 py-3 text-center">
                               <button
+                                type="button"
                                 onClick={(e) => handleToggleFeatured(prop, e)}
                                 title={prop.featured ? 'Remove featured' : 'Make featured'}
-                                className="p-1 hover:scale-110 transition-transform"
+                                className="p-1.5 hover:scale-110 transition-transform"
                               >
                                 <Star
                                   className={`w-4 h-4 ${
@@ -1159,9 +1264,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 />
                               </button>
                             </td>
-                            <td className="px-5 py-3 text-right">
+                            <td className="px-5 py-3 text-right whitespace-nowrap">
                               <div className="flex items-center justify-end gap-1.5">
                                 <button
+                                  type="button"
                                   onClick={() => onSelectPropertyPreview(prop)}
                                   title="Preview"
                                   className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100"
@@ -1169,6 +1275,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   <Eye className="w-3.5 h-3.5" />
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     setEditingProperty(prop);
                                     setIsAddPropertyOpen(true);
@@ -1179,6 +1286,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   <Edit className="w-3.5 h-3.5" />
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={(e) => handleDeleteProperty(prop.propertyId, e)}
                                   title="Delete"
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
@@ -1189,12 +1297,50 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                             </td>
                           </tr>
                         ))}
-                    </tbody>
-                  </table>
+                        {pagedAdminProps.items.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="p-8 text-center text-slate-400">
+                              No properties match your active search or status filter.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {pagedAdminProps.totalPages > 1 && (
+                    <div className="px-5 py-3.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70">
+                      <span className="text-xs text-slate-500">
+                        Page {pagedAdminProps.currentPage} of {pagedAdminProps.totalPages} ({pagedAdminProps.totalItems} listings)
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={pagedAdminProps.currentPage <= 1}
+                          onClick={() => setAdminPropsPage((p) => Math.max(1, p - 1))}
+                          className="inline-flex items-center gap-1 px-3 min-h-[36px] rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold whitespace-nowrap"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Prev</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pagedAdminProps.currentPage >= pagedAdminProps.totalPages}
+                          onClick={() =>
+                            setAdminPropsPage((p) => Math.min(pagedAdminProps.totalPages, p + 1))
+                          }
+                          className="inline-flex items-center gap-1 px-3 min-h-[36px] rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold whitespace-nowrap"
+                        >
+                          <span>Next</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* SECTION 3: AGENT MANAGEMENT */}
           {activeSection === 'agents' && (
@@ -1372,7 +1518,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     <div className="text-2xl sm:text-3xl font-extrabold text-[#17243B] font-sans">
                       {properties.length}
                     </div>
-                    <span className="text-[10px] text-slate-500">Across 8 districts</span>
+                    <span className="text-[10px] text-slate-500">Across {locationsList.length} districts</span>
                   </div>
                 </div>
 
@@ -1451,24 +1597,18 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       <MapPin className="w-4 h-4 text-[#C6A878]" />
                       <span>Properties by Cebu District</span>
                     </h3>
-                    <span className="text-xs text-slate-400 font-medium">8 Locations</span>
+                    <span className="text-xs text-slate-400 font-medium">{locationsList.length} Locations</span>
                   </div>
 
                   <div className="space-y-3">
-                    {[
-                      'Cebu Business Park',
-                      'Cebu IT Park',
-                      'Mactan Newtown',
-                      'Banilad',
-                      'Lahug',
-                      'SRP',
-                      'Mandaue',
-                      'Lapu-Lapu City',
-                    ].map((loc) => {
-                      const count = properties.filter((p) => p.location === loc).length;
+                    {locationsList.map((locObj) => {
+                      const loc = locObj.name;
+                      const count = properties.filter(
+                        (p) => p.location.toLowerCase() === loc.toLowerCase()
+                      ).length;
                       const percentage = properties.length > 0 ? (count / properties.length) * 100 : 0;
                       return (
-                        <div key={loc} className="space-y-1">
+                        <div key={locObj.id} className="space-y-1">
                           <div className="flex items-center justify-between text-xs font-semibold">
                             <span className="text-slate-700">{loc}</span>
                             <span className="text-slate-500 font-mono">{count} ({percentage.toFixed(0)}%)</span>
@@ -1569,17 +1709,20 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => {
                     setEditingBuilding(null);
+                    setBuildingError(null);
                     setNewBuildingName('');
-                    setNewBuildingLocation('Cebu Business Park');
+                    setNewBuildingLocation(locationsList[0]?.name || 'Cebu Business Park');
                     setNewBuildingAddress('');
                     setNewBuildingDescription('');
+                    setNewBuildingImage('/assets/extracted/the_alcoves.png');
                     setIsAddBuildingOpen(true);
                   }}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs hover:bg-[#253754] transition-colors"
+                  className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs hover:bg-[#253754] transition-colors whitespace-nowrap"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>Add Building</span>
                 </button>
               </div>
@@ -1615,21 +1758,27 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
                         <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                           <button
+                            type="button"
                             onClick={() => setViewingBuildingProperties(bld)}
-                            className="font-semibold text-[#17243B] hover:text-[#C6A878] text-[11px] flex items-center gap-1"
+                            className="font-semibold text-[#17243B] hover:text-[#C6A878] text-[11px] flex items-center gap-1 whitespace-nowrap"
                           >
-                            <Eye className="w-3 h-3" />
+                            <Eye className="w-3 h-3 flex-shrink-0" />
                             <span>View Units ({associatedProps.length})</span>
                           </button>
 
                           <div className="flex items-center gap-1">
                             <button
+                              type="button"
                               onClick={() => {
                                 setEditingBuilding(bld);
+                                setBuildingError(null);
                                 setNewBuildingName(bld.buildingName);
                                 setNewBuildingLocation(bld.location);
                                 setNewBuildingAddress(bld.address);
                                 setNewBuildingDescription(bld.description);
+                                setNewBuildingImage(
+                                  bld.buildingImages?.[0] || '/assets/extracted/the_alcoves.png'
+                                );
                                 setIsAddBuildingOpen(true);
                               }}
                               title="Edit Building"
@@ -1752,20 +1901,24 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           {/* SECTION 7: CUSTOMER INQUIRIES */}
           {activeSection === 'inquiries' && (
             <div className="space-y-6">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
-                    Client Consultation & Viewing Inquiries
+                    Client Consultation &amp; Viewing Inquiries
                   </h2>
                   <p className="text-xs text-slate-500 mt-1">
-                    Manage confidential client inquiries submitted through the public website. Track status from New to Contacted and Closed.
+                    Confidential leads routed to{' '}
+                    <strong className="text-[#17243B]">
+                      {siteSettings.inquiryNotificationEmail || 'Martiligando@gmail.com'}
+                    </strong>
+                    . Track status from New to Contacted and Closed, or inspect generated email notifications.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="px-3 py-1 rounded-full bg-teal-50 text-teal-800 text-xs font-bold">
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className="px-3 py-1 rounded-full bg-teal-50 text-teal-800 text-xs font-bold whitespace-nowrap">
                     {inquiries.filter((i) => i.status === 'new').length} New
                   </span>
-                  <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold">
+                  <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold whitespace-nowrap">
                     {inquiries.length} Total
                   </span>
                 </div>
@@ -1779,10 +1932,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         <th className="px-5 py-3.5">Client Name</th>
                         <th className="px-4 py-3.5">Contact Details</th>
                         <th className="px-4 py-3.5">Property of Interest</th>
-                        <th className="px-4 py-3.5">Message / Request</th>
+                        <th className="px-4 py-3.5">Routed Email</th>
                         <th className="px-4 py-3.5">Date</th>
                         <th className="px-4 py-3.5">Status</th>
-                        <th className="px-4 py-3.5 text-center">Quick Reply</th>
+                        <th className="px-4 py-3.5 text-center">Quick Reply &amp; Notification</th>
                         <th className="px-5 py-3.5 text-right">Update Status</th>
                       </tr>
                     </thead>
@@ -1790,8 +1943,13 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       {inquiries.length > 0 ? (
                         inquiries.map((inq) => {
                           const isUpdating = inquiryStatusUpdating === inq.inquiryId;
-                          const cleanPhone = (inq.phone || '').replace(/[^0-9]/g, '');
-                          const mailSubject = encodeURIComponent(`Cebu Prime Properties: Regarding your inquiry on ${inq.propertyInterest}`);
+                          const assignedRecipient =
+                            inq.recipientEmail ||
+                            siteSettings.inquiryNotificationEmail ||
+                            'Martiligando@gmail.com';
+                          const mailSubject = encodeURIComponent(
+                            `Cebu Prime Properties: Regarding your inquiry on ${inq.propertyInterest}`
+                          );
                           const mailBody = encodeURIComponent(
                             `Hello ${inq.fullName},\n\nThank you for reaching out to Cebu Prime Properties regarding ${inq.propertyInterest}.\n\n`
                           );
@@ -1807,13 +1965,19 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   {inq.phone} • {inq.preferredContact || 'phone'}
                                 </div>
                               </td>
-                              <td className="px-4 py-3.5 font-semibold text-[#C6A878] whitespace-nowrap">
-                                {inq.propertyInterest}
-                              </td>
-                              <td className="px-4 py-3.5 text-slate-600 max-w-xs text-xs">
-                                <div className="line-clamp-2" title={inq.message}>
+                              <td className="px-4 py-3.5 font-semibold text-[#C6A878]">
+                                <div className="max-w-[180px] truncate" title={inq.propertyInterest}>
+                                  {inq.propertyInterest}
+                                </div>
+                                <div className="text-[11px] text-slate-500 font-normal line-clamp-1" title={inq.message}>
                                   {inq.message || 'Standard brochure & private viewing request.'}
                                 </div>
+                              </td>
+                              <td className="px-4 py-3.5 whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-mono">
+                                  <Mail className="w-3 h-3 text-[#C6A878]" />
+                                  <span>{assignedRecipient}</span>
+                                </span>
                               </td>
                               <td className="px-4 py-3.5 text-slate-400 whitespace-nowrap">
                                 {new Date(inq.createdAt).toLocaleDateString()}
@@ -1833,6 +1997,15 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                               </td>
                               <td className="px-4 py-3.5 text-center whitespace-nowrap">
                                 <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setViewingInquiryEmail(inq)}
+                                    title="View formatted notification email message"
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#17243B] hover:bg-[#253754] text-[#C6A878] text-[10px] font-bold transition-colors inline-flex items-center gap-1 whitespace-nowrap"
+                                  >
+                                    <FileText className="w-3 h-3 flex-shrink-0" />
+                                    <span>View Email</span>
+                                  </button>
                                   <a
                                     href={`mailto:${inq.email}?subject=${mailSubject}&body=${mailBody}`}
                                     title={`Email ${inq.email}`}
@@ -1840,19 +2013,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                   >
                                     <Mail className="w-3.5 h-3.5" />
                                   </a>
-                                  {cleanPhone && (
-                                    <a
-                                      href={`https://wa.me/${cleanPhone}?text=${encodeURIComponent(
-                                        `Hello ${inq.fullName}, this is Cebu Prime Properties following up on your inquiry for ${inq.propertyInterest}.`
-                                      )}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      title={`WhatsApp ${inq.phone}`}
-                                      className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 transition-colors inline-flex items-center justify-center"
-                                    >
-                                      <MessageCircle className="w-3.5 h-3.5" />
-                                    </a>
-                                  )}
                                   <a
                                     href={`tel:${inq.phone}`}
                                     title={`Call ${inq.phone}`}
@@ -1865,6 +2025,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                               <td className="px-5 py-3.5 text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
+                                    type="button"
                                     disabled={isUpdating || inq.status === 'new'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'new')}
                                     className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
@@ -1876,6 +2037,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     New
                                   </button>
                                   <button
+                                    type="button"
                                     disabled={isUpdating || inq.status === 'contacted'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'contacted')}
                                     className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
@@ -1887,6 +2049,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     Contacted
                                   </button>
                                   <button
+                                    type="button"
                                     disabled={isUpdating || inq.status === 'closed'}
                                     onClick={() => handleUpdateInquiryStatus(inq.inquiryId, 'closed')}
                                     className={`px-2 py-1 rounded text-[10px] font-bold transition-colors whitespace-nowrap ${
@@ -1898,6 +2061,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     Closed
                                   </button>
                                   <button
+                                    type="button"
                                     onClick={() => handleDeleteInquiry(inq.inquiryId)}
                                     title="Delete inquiry"
                                     className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
@@ -2218,21 +2382,180 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* Inquiry Notification & Email Routing (Master Authority Private Configuration) */}
+                <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                  <div className="pb-2 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-sm text-[#17243B] flex items-center gap-2">
+                        <Mail className="w-4 h-4 text-[#C6A878] flex-shrink-0" />
+                        <span>Inquiry Notification &amp; Email Routing</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Assign the private recipient email for all incoming inquiry notifications and customize the email template. This email is kept strictly confidential from public visitors.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Assigned Notification Recipient Email *
+                      </label>
+                      <input
+                        type="email"
+                        value={siteSettings.inquiryNotificationEmail || ''}
+                        onChange={(e) =>
+                          setSiteSettings({
+                            ...siteSettings,
+                            inquiryNotificationEmail: e.target.value,
+                          })
+                        }
+                        placeholder="advisor@cebuprimeproperties.ph"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs font-medium"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Notification Email Subject Template
+                      </label>
+                      <input
+                        type="text"
+                        value={
+                          siteSettings.inquiryNotificationSubject ??
+                          DEFAULT_INQUIRY_EMAIL_SUBJECT
+                        }
+                        onChange={(e) =>
+                          setSiteSettings({
+                            ...siteSettings,
+                            inquiryNotificationSubject: e.target.value,
+                          })
+                        }
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                        <label className="font-semibold text-slate-700">
+                          Notification Email Message Body Template
+                        </label>
+                        <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                          {[
+                            '{{clientName}}',
+                            '{{clientEmail}}',
+                            '{{clientPhone}}',
+                            '{{property}}',
+                            '{{message}}',
+                            '{{date}}',
+                          ].map((token) => (
+                            <button
+                              key={token}
+                              type="button"
+                              onClick={() =>
+                                setSiteSettings({
+                                  ...siteSettings,
+                                  inquiryEmailTemplate: `${
+                                    siteSettings.inquiryEmailTemplate ??
+                                    DEFAULT_INQUIRY_EMAIL_BODY
+                                  } ${token}`,
+                                })
+                              }
+                              className="px-2 py-0.5 rounded bg-slate-100 hover:bg-[#17243B] hover:text-[#C6A878] text-slate-700 font-mono transition-colors whitespace-nowrap"
+                            >
+                              +{token}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <textarea
+                        rows={5}
+                        value={
+                          siteSettings.inquiryEmailTemplate ??
+                          DEFAULT_INQUIRY_EMAIL_BODY
+                        }
+                        onChange={(e) =>
+                          setSiteSettings({
+                            ...siteSettings,
+                            inquiryEmailTemplate: e.target.value,
+                          })
+                        }
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Public Confirmation Auto-Reply Message (Shown to Visitors After Submitting)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={siteSettings.inquiryAutoReplyMessage || ''}
+                        onChange={(e) =>
+                          setSiteSettings({
+                            ...siteSettings,
+                            inquiryAutoReplyMessage: e.target.value,
+                          })
+                        }
+                        placeholder="A dedicated luxury property specialist will reach out to you shortly..."
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                      />
+                    </div>
+
+                    {/* Live Email Preview Box */}
+                    <div className="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                        <span>Live Notification Email Preview</span>
+                        <span className="font-mono text-[#17243B]">
+                          To: {siteSettings.inquiryNotificationEmail || 'Martiligando@gmail.com'}
+                        </span>
+                      </div>
+                      {(() => {
+                        const preview = formatInquiryNotificationEmail(
+                          {
+                            subject: siteSettings.inquiryNotificationSubject,
+                            body: siteSettings.inquiryEmailTemplate,
+                          },
+                          {
+                            fullName: 'Elena Villanueva',
+                            email: 'elena.v@example.com',
+                            phone: '+63 917 555 0192',
+                            propertyInterest: 'The Alcoves - 18th Floor Residence',
+                            message: 'Requesting floor plan and private viewing this Friday.',
+                            createdAt: new Date().toISOString(),
+                          }
+                        );
+                        return (
+                          <div className="space-y-1.5 text-xs">
+                            <div className="font-bold text-[#17243B]">
+                              Subject: {preview.subject}
+                            </div>
+                            <pre className="whitespace-pre-wrap font-sans text-[11px] text-slate-600 bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                              {preview.body}
+                            </pre>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Contact Information & Channels */}
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                   <h3 className="font-bold text-sm text-[#17243B] flex items-center gap-2 pb-2 border-b border-slate-100">
                     <Phone className="w-4 h-4 text-[#C6A878]" />
-                    <span>Contact Information & Corporate Channels</span>
+                    <span>Public Corporate Contact Channels</span>
                   </h3>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Inquiry Email</label>
+                      <label className="block font-semibold text-slate-700 mb-1">Public Display Email</label>
                       <input
                         type="email"
                         value={siteSettings.contactEmail}
                         onChange={(e) => setSiteSettings({ ...siteSettings, contactEmail: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                         required
                       />
                     </div>
@@ -2243,7 +2566,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         type="text"
                         value={siteSettings.contactPhone}
                         onChange={(e) => setSiteSettings({ ...siteSettings, contactPhone: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                       />
                     </div>
 
@@ -2253,7 +2576,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         type="text"
                         value={siteSettings.officeAddress}
                         onChange={(e) => setSiteSettings({ ...siteSettings, officeAddress: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                       />
                     </div>
 
@@ -2263,7 +2586,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         type="url"
                         value={siteSettings.facebookUrl || ''}
                         onChange={(e) => setSiteSettings({ ...siteSettings, facebookUrl: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                       />
                     </div>
 
@@ -2273,7 +2596,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                         type="url"
                         value={siteSettings.instagramUrl || ''}
                         onChange={(e) => setSiteSettings({ ...siteSettings, instagramUrl: e.target.value })}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                       />
                     </div>
                   </div>
@@ -2284,9 +2607,9 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                   <button
                     type="submit"
                     disabled={isSavingSettings}
-                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors disabled:opacity-50"
+                    className="inline-flex items-center gap-2 px-6 min-h-[44px] rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors disabled:opacity-50 whitespace-nowrap"
                   >
-                    <Save className="w-4 h-4" />
+                    <Save className="w-4 h-4 flex-shrink-0" />
                     <span>{isSavingSettings ? 'Saving Settings...' : 'Save Website Settings'}</span>
                   </button>
                 </div>
@@ -2488,22 +2811,30 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         </div>
       )}
 
-      {/* MODAL: ADD BUILDING */}
+      {/* MODAL: ADD / EDIT BUILDING */}
       {isAddBuildingOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl space-y-4 text-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-md p-5 sm:p-6 border border-slate-200 shadow-2xl space-y-4 text-xs my-auto max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
                 <Building className="w-5 h-5 text-[#C6A878]" />
-                <span>Add Building Development</span>
+                <span>{editingBuilding ? 'Edit Building Development' : 'Add Building Development'}</span>
               </h3>
               <button
+                type="button"
                 onClick={() => setIsAddBuildingOpen(false)}
-                className="w-7 h-7 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
+                className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {buildingError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{buildingError}</span>
+              </div>
+            )}
 
             <form onSubmit={handleAddBuilding} className="space-y-3">
               <div>
@@ -2514,7 +2845,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                   onChange={(e) => setNewBuildingName(e.target.value)}
                   placeholder="e.g. Horizons 101"
                   required
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                 />
               </div>
 
@@ -2523,16 +2854,18 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                 <select
                   value={newBuildingLocation}
                   onChange={(e) => setNewBuildingLocation(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white"
+                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs bg-white"
                 >
-                  <option value="Cebu Business Park">Cebu Business Park</option>
-                  <option value="Cebu IT Park">Cebu IT Park</option>
-                  <option value="Mactan Newtown">Mactan Newtown</option>
-                  <option value="Banilad">Banilad</option>
-                  <option value="Lahug">Lahug</option>
-                  <option value="SRP">SRP</option>
-                  <option value="Mandaue">Mandaue</option>
-                  <option value="Lapu-Lapu City">Lapu-Lapu City</option>
+                  {Array.from(
+                    new Set([
+                      ...locationsList.map((l) => l.name),
+                      ...(editingBuilding?.location ? [editingBuilding.location] : []),
+                    ])
+                  ).map((locName) => (
+                    <option key={locName} value={locName}>
+                      {locName}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -2543,7 +2876,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                   value={newBuildingAddress}
                   onChange={(e) => setNewBuildingAddress(e.target.value)}
                   placeholder="e.g. General Maxilom Ave, Cebu City"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
                 />
               </div>
 
@@ -2558,17 +2891,51 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                 />
               </div>
 
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-slate-700">Building Cover Photograph</label>
+                  <label className="cursor-pointer text-[11px] font-bold text-[#17243B] hover:text-[#C6A878] inline-flex items-center gap-1">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isUploadingBuildingImg ? 'Uploading...' : 'Upload Photo'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={isUploadingBuildingImg}
+                      onChange={handleBuildingImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={newBuildingImage}
+                  onChange={(e) => setNewBuildingImage(e.target.value)}
+                  placeholder="/assets/extracted/the_alcoves.png"
+                  className="w-full h-9 px-3 rounded-xl border border-slate-300 text-xs font-mono"
+                />
+                {newBuildingImage && (
+                  <div className="aspect-[16/9] rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                    <img
+                      src={newBuildingImage}
+                      alt="Building Cover Preview"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsAddBuildingOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 font-semibold"
+                  className="px-4 min-h-[40px] rounded-xl border border-slate-300 text-slate-600 font-semibold whitespace-nowrap"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-[#17243B] text-[#C6A878] font-bold"
+                  disabled={isUploadingBuildingImg}
+                  className="px-4 min-h-[40px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold whitespace-nowrap disabled:opacity-50"
                 >
                   {editingBuilding ? 'Update Building' : 'Save Building'}
                 </button>
@@ -2799,6 +3166,96 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         </div>
       )}
 
+      {/* MODAL: VIEW INQUIRY NOTIFICATION EMAIL */}
+      {viewingInquiryEmail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setViewingInquiryEmail(null)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-lg p-5 sm:p-6 border border-slate-200 shadow-2xl space-y-4 text-xs my-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const recipient =
+                viewingInquiryEmail.recipientEmail ||
+                siteSettings.inquiryNotificationEmail ||
+                'Martiligando@gmail.com';
+              const fallback = formatInquiryNotificationEmail(
+                {
+                  subject: siteSettings.inquiryNotificationSubject,
+                  body: siteSettings.inquiryEmailTemplate,
+                },
+                {
+                  fullName: viewingInquiryEmail.fullName,
+                  email: viewingInquiryEmail.email,
+                  phone: viewingInquiryEmail.phone,
+                  propertyInterest: viewingInquiryEmail.propertyInterest,
+                  message: viewingInquiryEmail.message,
+                  createdAt: viewingInquiryEmail.createdAt,
+                }
+              );
+              const subject = viewingInquiryEmail.notificationSubject || fallback.subject;
+              const body = viewingInquiryEmail.notificationMessage || fallback.body;
+
+              return (
+                <>
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
+                      <Mail className="w-5 h-5 text-[#C6A878]" />
+                      <span>Inquiry Notification Email</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setViewingInquiryEmail(null)}
+                      className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-500 font-semibold">Assigned Recipient:</span>
+                      <span className="font-mono font-bold text-[#17243B]">{recipient}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block mb-0.5">Subject:</span>
+                      <div className="font-bold text-[#17243B]">{subject}</div>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-semibold block mb-1">Email Message:</span>
+                      <pre className="whitespace-pre-wrap font-sans text-xs text-slate-700 bg-white p-3.5 rounded-lg border border-slate-200 leading-relaxed max-h-64 overflow-y-auto">
+                        {body}
+                      </pre>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex flex-wrap items-center justify-end gap-2">
+                    <a
+                      href={`mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`}
+                      className="inline-flex items-center gap-1.5 px-4 min-h-[40px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-[#17243B] font-semibold whitespace-nowrap"
+                    >
+                      <Send className="w-3.5 h-3.5 text-[#C6A878]" />
+                      <span>Forward to Recipient</span>
+                    </a>
+                    <a
+                      href={`mailto:${viewingInquiryEmail.email}?subject=${encodeURIComponent(
+                        `Re: Your Cebu Prime Properties Inquiry (${viewingInquiryEmail.propertyInterest})`
+                      )}`}
+                      className="inline-flex items-center gap-1.5 px-4 min-h-[40px] rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold whitespace-nowrap"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Reply to Client</span>
+                    </a>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* Add / Edit Property Modal */}
       <AddPropertyModal
         isOpen={isAddPropertyOpen}
@@ -2809,6 +3266,8 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         onSaved={onPropertyUpdated}
         editingProperty={editingProperty}
         buildings={buildings}
+        locations={locationsList}
+        isSuperAdmin={true}
       />
     </div>
   );

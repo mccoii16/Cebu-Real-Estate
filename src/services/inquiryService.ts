@@ -11,6 +11,8 @@ import {
   Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { getWebsiteSettings, getCachedWebsiteSettings } from './settingsService';
+import { formatInquiryNotificationEmail } from '../utils/filterProperties';
 
 export interface InquiryRecord {
   inquiryId: string;
@@ -23,6 +25,8 @@ export interface InquiryRecord {
   status: 'new' | 'contacted' | 'closed';
   createdAt: string;
   recipientEmail?: string;
+  notificationSubject?: string;
+  notificationMessage?: string;
 }
 
 const LOCAL_STORAGE_INQUIRIES_KEY = 'cebu_prime_inquiries_store_v1';
@@ -66,9 +70,10 @@ export function generateInquiryId(): string {
 /**
  * Submits an inquiry from a customer or visitor.
  * Multi-layer persistence:
- * 1. Writes directly to Firestore `inquiries` collection (real-time to Super Admin).
+ * 1. Formats notification email using Super Admin routing settings.
  * 2. Caches in localStorage for local resilience.
- * 3. Sends to `/api/inquiries` for server logging and persistence.
+ * 3. Writes directly to Firestore `inquiries` collection (real-time to Super Admin).
+ * 4. Sends to `/api/inquiries` for server logging and optional email webhook delivery.
  */
 export async function submitInquiry(data: {
   fullName: string;
@@ -79,17 +84,46 @@ export async function submitInquiry(data: {
   message?: string;
 }): Promise<{ success: boolean; inquiryId: string }> {
   const inquiryId = generateInquiryId();
+  const createdAt = new Date().toISOString();
+
+  let activeSettings = getCachedWebsiteSettings();
+  try {
+    activeSettings = await getWebsiteSettings();
+  } catch {
+    // fallback to cached settings
+  }
+
+  const recipientEmail =
+    (activeSettings.inquiryNotificationEmail || MASTER_ADMIN_EMAIL).trim() || MASTER_ADMIN_EMAIL;
+
+  const formattedEmail = formatInquiryNotificationEmail(
+    {
+      subject: activeSettings.inquiryNotificationSubject,
+      body: activeSettings.inquiryEmailTemplate,
+    },
+    {
+      fullName: data.fullName,
+      email: data.email,
+      phone: data.phone,
+      propertyInterest: data.propertyInterest,
+      message: data.message,
+      createdAt,
+    }
+  );
+
   const newRecord: InquiryRecord = {
     inquiryId,
     fullName: data.fullName.trim(),
     email: data.email.trim(),
     phone: data.phone.trim(),
     propertyInterest: (data.propertyInterest || 'General Luxury Advisory').trim(),
-    preferredContact: data.preferredContact || 'phone',
+    preferredContact: data.preferredContact || 'email',
     message: (data.message || '').trim(),
     status: 'new',
-    createdAt: new Date().toISOString(),
-    recipientEmail: MASTER_ADMIN_EMAIL,
+    createdAt,
+    recipientEmail,
+    notificationSubject: formattedEmail.subject,
+    notificationMessage: formattedEmail.body,
   };
 
   // 1. Immediately buffer in local storage so it can never be lost
@@ -105,7 +139,7 @@ export async function submitInquiry(data: {
   try {
     const docRef = doc(db, 'inquiries', inquiryId);
     await setDoc(docRef, newRecord);
-    console.info(`[InquiryService] Inquiry ${inquiryId} successfully saved to Firestore.`);
+    console.info(`[InquiryService] Inquiry ${inquiryId} saved to Firestore.`);
   } catch (firestoreErr) {
     console.warn('[InquiryService] Direct Firestore write notice (will rely on server/local):', firestoreErr);
   }

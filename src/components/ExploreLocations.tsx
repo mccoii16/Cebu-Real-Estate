@@ -39,30 +39,35 @@ export const ExploreLocations: React.FC<ExploreLocationsProps> = ({
         </div>
 
         {/* Right 4 Location Cards */}
-        <div className="lg:col-span-9 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="lg:col-span-9 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
           {displayLocations.map((location) => (
             <div
               key={location.id}
               onClick={() => onSelectLocation(location.name)}
-              className="group relative rounded-2xl overflow-hidden shadow-[0_4px_16px_rgba(0,0,0,0.06)] hover:shadow-[0_12px_28px_rgba(23,36,59,0.18)] hover:-translate-y-1 transition-all duration-300 cursor-pointer aspect-[270/145]"
+              className="group relative rounded-2xl overflow-hidden shadow-[0_4px_16px_rgba(0,0,0,0.06)] hover:shadow-[0_12px_28px_rgba(23,36,59,0.18)] hover:-translate-y-1 transition-all duration-300 cursor-pointer aspect-[16/10] sm:aspect-[270/145]"
             >
               <img
                 src={location.image || '/assets/extracted/photo_the_alcoves.png'}
                 alt={location.name}
+                loading="lazy"
+                decoding="async"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/assets/extracted/photo_the_alcoves.png';
+                }}
                 className="w-full h-full object-cover rounded-2xl group-hover:scale-105 transition-transform duration-500"
                 referrerPolicy="no-referrer"
               />
               {/* Bottom gradient and title tag for clear readability */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent flex items-end p-3 pointer-events-none">
-                <div className="w-full flex items-center justify-between text-white">
-                  <div className="overflow-hidden pr-1">
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent flex items-end p-3 pointer-events-none">
+                <div className="w-full flex items-center justify-between text-white gap-2">
+                  <div className="overflow-hidden min-w-0">
                     <span className="block text-xs font-bold leading-tight truncate drop-shadow-sm">{location.name}</span>
                     {location.tagline && (
                       <span className="block text-[10px] text-[#C6A878] font-medium truncate drop-shadow-sm">{location.tagline}</span>
                     )}
                   </div>
-                  <div className="w-6 h-6 rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center flex-shrink-0 group-hover:bg-[#C6A878] group-hover:text-[#17243B] transition-colors">
-                    <ArrowRight className="w-3 h-3 text-white group-hover:text-[#17243B]" />
+                  <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center flex-shrink-0 group-hover:bg-[#C6A878] group-hover:text-[#17243B] transition-colors">
+                    <ArrowRight className="w-3.5 h-3.5 text-white group-hover:text-[#17243B]" />
                   </div>
                 </div>
               </div>
@@ -75,3 +80,4 @@ export const ExploreLocations: React.FC<ExploreLocationsProps> = ({
     </section>
   );
 };
+

@@ -1,6 +1,7 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { WebsiteSettings } from '../types/property';
+import { DEFAULT_INQUIRY_EMAIL_SUBJECT, DEFAULT_INQUIRY_EMAIL_BODY } from '../utils/filterProperties';
 
 export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
   siteName: 'CEBU PRIME',
@@ -13,6 +14,11 @@ export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
   officeAddress: 'Cebu Business Park, Archbishop Reyes Ave, Cebu City 6000',
   facebookUrl: 'https://facebook.com',
   instagramUrl: 'https://instagram.com',
+  inquiryNotificationEmail: 'Martiligando@gmail.com',
+  inquiryNotificationSubject: DEFAULT_INQUIRY_EMAIL_SUBJECT,
+  inquiryEmailTemplate: DEFAULT_INQUIRY_EMAIL_BODY,
+  inquiryAutoReplyMessage:
+    'Thank you for reaching out. Your inquiry has been securely received by our advisory desk, and a dedicated specialist will contact you shortly.',
   heroImages: [
     '/assets/extracted/hero_skyline_clean.png',
     '/assets/extracted/photo_park_avenue.png',

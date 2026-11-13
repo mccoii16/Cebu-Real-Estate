@@ -516,7 +516,18 @@ app.delete(
  */
 app.post('/api/inquiries', async (req: Request, res: Response) => {
   try {
-    const { inquiryId: providedId, fullName, email, phone, propertyInterest, preferredContact, message } = req.body;
+    const {
+      inquiryId: providedId,
+      fullName,
+      email,
+      phone,
+      propertyInterest,
+      preferredContact,
+      message,
+      recipientEmail: providedRecipient,
+      notificationSubject: providedSubject,
+      notificationMessage: providedBody,
+    } = req.body;
 
     if (!fullName || !email || !phone) {
       res.status(400).json({ error: 'Name, email, and phone number are required' });
@@ -524,24 +535,51 @@ app.post('/api/inquiries', async (req: Request, res: Response) => {
     }
 
     const inquiryId = providedId || `inq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    let targetRecipient = (providedRecipient || SUPER_ADMIN_EMAIL).trim();
+
+    // Also inspect Firestore settings/general if permitted so even direct API calls route cleanly
+    if (!providedRecipient) {
+      try {
+        const settingsSnap = await adminDb.collection('settings').doc('general').get();
+        if (settingsSnap.exists) {
+          const settingsData = settingsSnap.data();
+          if (settingsData?.inquiryNotificationEmail) {
+            targetRecipient = String(settingsData.inquiryNotificationEmail).trim();
+          }
+        }
+      } catch {
+        // Ignore IAM fallback in dev
+      }
+    }
+
+    const subject =
+      providedSubject || `New Property Inquiry: ${propertyInterest || 'General Inquiry'} — ${fullName}`;
+    const bodyText =
+      providedBody ||
+      `Client Name: ${fullName}\nEmail: ${email}\nPhone: ${phone}\nProperty: ${
+        propertyInterest || 'General Inquiry'
+      }\n\nMessage:\n${message || 'No additional note'}`;
+
     const inquiryData = {
       inquiryId,
       fullName,
       email,
       phone,
       propertyInterest: propertyInterest || 'General Inquiry',
-      preferredContact: preferredContact || 'phone',
+      preferredContact: preferredContact || 'email',
       message: message || '',
       status: 'new',
       createdAt: new Date().toISOString(),
-      recipientEmail: 'Martiligando@gmail.com',
+      recipientEmail: targetRecipient,
+      notificationSubject: subject,
+      notificationMessage: bodyText,
     };
 
     console.log(`\n=======================================================`);
-    console.log(`🔔 [NEW INQUIRY RECEIVED FOR Martiligando@gmail.com]`);
+    console.log(`🔔 [NEW INQUIRY ROUTED TO: ${targetRecipient}]`);
+    console.log(`Subject: ${subject}`);
     console.log(`From: ${fullName} (${email}, Phone: ${phone})`);
-    console.log(`Interested in: ${propertyInterest}`);
-    console.log(`Message: ${message || 'No additional note'}`);
+    console.log(`Message Body:\n${bodyText}`);
     console.log(`=======================================================\n`);
 
     // Store in memory repository
@@ -554,7 +592,39 @@ app.post('/api/inquiries', async (req: Request, res: Response) => {
       console.warn('[Inquiry] Firestore insert bypassed on server:', dbErr.message);
     }
 
-    res.status(201).json({ success: true, inquiryId });
+    // Optional real email delivery if RESEND_API_KEY is configured in environment
+    let emailDelivered = false;
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const fromAddress =
+          process.env.RESEND_FROM_EMAIL || 'Cebu Prime Properties <inquiries@resend.dev>';
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: fromAddress,
+            to: [targetRecipient],
+            reply_to: email,
+            subject,
+            text: bodyText,
+          }),
+        });
+        if (resendRes.ok) {
+          emailDelivered = true;
+          console.log(`[Email] Notification email sent to ${targetRecipient} via Resend.`);
+        } else {
+          const errText = await resendRes.text();
+          console.warn('[Email] Resend API returned non-OK:', resendRes.status, errText);
+        }
+      } catch (emailErr: any) {
+        console.warn('[Email] Resend dispatch error:', emailErr.message);
+      }
+    }
+
+    res.status(201).json({ success: true, inquiryId, emailDelivered });
   } catch (error: any) {
     console.error('Error submitting inquiry:', error);
     res.status(500).json({ error: error.message });
