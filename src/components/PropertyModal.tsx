@@ -235,7 +235,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                   prevImage();
                 }}
                 aria-label="Previous image"
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
+                className="absolute left-3 top-[36%] sm:top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
@@ -246,7 +246,7 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                   nextImage();
                 }}
                 aria-label="Next image"
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
+                className="absolute right-3 top-[36%] sm:top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center transition-colors z-20 focus:outline-none"
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
@@ -302,19 +302,28 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
 
         {/* Gallery Thumbnails Strip */}
         {images.length > 1 && (
-          <div className="px-6 py-2.5 bg-slate-100 flex items-center gap-2 overflow-x-auto border-b border-slate-200">
+          <div className="px-4 sm:px-8 py-3.5 sm:py-4 bg-slate-50 flex items-center gap-3 overflow-x-auto border-b border-slate-200 flex-shrink-0">
             {images.map((imgUrl, idx) => (
               <button
                 key={idx}
                 type="button"
                 onClick={() => setActiveImageIndex(idx)}
-                className={`relative w-16 h-12 rounded-lg overflow-hidden flex-shrink-0 border-2 transition-all ${
-                  activeImageIndex === idx ? 'border-[#C6A878] scale-105' : 'border-transparent opacity-60 hover:opacity-100'
+                className={`relative w-16 h-12 sm:w-20 sm:h-14 rounded-xl overflow-hidden flex-shrink-0 border-2 transition-all ${
+                  activeImageIndex === idx
+                    ? 'border-[#C6A878] ring-2 ring-[#C6A878]/25 shadow-sm opacity-100'
+                    : 'border-transparent opacity-65 hover:opacity-100'
                 }`}
               >
                 <img
                   src={imgUrl}
                   alt={`Thumbnail ${idx + 1}`}
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.dataset.fallback) {
+                      target.dataset.fallback = 'true';
+                      target.src = '/assets/extracted/the_alcoves.png';
+                    }
+                  }}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -575,15 +584,18 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         {/* Bottom Fullscreen Thumbnails Strip */}
         {images.length > 1 && (
           <div
-            className="flex items-center gap-2 overflow-x-auto max-w-4xl py-2 px-4 bg-black/40 rounded-2xl backdrop-blur-sm z-20"
+            className="flex items-center gap-3 overflow-x-auto max-w-4xl py-3 px-4 sm:px-5 mt-3 bg-black/50 rounded-2xl backdrop-blur-sm z-20 flex-shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
             {images.map((img, i) => (
               <button
                 key={i}
+                type="button"
                 onClick={() => setActiveImageIndex(i)}
-                className={`relative w-16 h-12 rounded-lg overflow-hidden flex-shrink-0 border-2 transition-all ${
-                  activeImageIndex === i ? 'border-[#C6A878] scale-105' : 'border-transparent opacity-50 hover:opacity-100'
+                className={`relative w-16 h-12 sm:w-20 sm:h-14 rounded-xl overflow-hidden flex-shrink-0 border-2 transition-all ${
+                  activeImageIndex === i
+                    ? 'border-[#C6A878] ring-2 ring-[#C6A878]/30 opacity-100'
+                    : 'border-transparent opacity-55 hover:opacity-100'
                 }`}
               >
                 <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />

@@ -27,7 +27,7 @@ export const AboutSection: React.FC = () => {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-16 py-8 border-y border-white/10">
           <div>
             <div className="text-3xl sm:text-4xl lg:text-5xl font-bold text-[#C6A878] font-mono tabular-nums mb-1">
-              ₱12B+
+              ₱13B+
             </div>
             <div className="text-xs sm:text-sm text-white/70">
               Total Transaction Volume
