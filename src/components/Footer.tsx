@@ -2,10 +2,13 @@ import React, { useState } from 'react';
 import { X, Shield } from 'lucide-react';
 import { NavTabId } from './LiquidNotchNav';
 import { LocationHighlight, WebsiteSettings } from '../types/property';
+import { buildNeighborhoodPath } from '../utils/slugs';
+import { isNeighborhoodPubliclyVisible } from '../utils/contentManagement';
 
 interface FooterProps {
   onNavClick: (tab: NavTabId) => void;
   onSelectLocation?: (locationName: string) => void;
+  onSelectNeighborhood?: (neighborhood: LocationHighlight) => void;
   locations?: LocationHighlight[];
   siteSettings?: WebsiteSettings;
 }
@@ -24,6 +27,7 @@ const LEGAL_COPY: Record<Exclude<LegalTopic, null>, string> = {
 export const Footer: React.FC<FooterProps> = ({
   onNavClick,
   onSelectLocation,
+  onSelectNeighborhood,
   locations,
   siteSettings,
 }) => {
@@ -33,14 +37,22 @@ export const Footer: React.FC<FooterProps> = ({
   const subtitle = siteSettings?.logoSubtitle || 'PROPERTIES';
   const officeAddress = siteSettings?.officeAddress || 'Cebu Business Park, Cebu City, 6000 Philippines';
 
-  const featuredAreas =
-    locations && locations.length > 0
-      ? locations.slice(0, 4).map((l) => l.name)
-      : ['Cebu Business Park', 'Cebu IT Park', 'Mactan Newtown', 'Banilad'];
+  const visibleLocations = (locations || []).filter(isNeighborhoodPubliclyVisible);
+  const featuredAreas: LocationHighlight[] =
+    visibleLocations.length > 0
+      ? visibleLocations.slice(0, 4)
+      : [
+          { id: 'loc-cbp', slug: 'cebu-business-park', name: 'Cebu Business Park', tagline: '', propertyCount: 0, image: '', description: '' },
+          { id: 'loc-it-park', slug: 'cebu-it-park', name: 'Cebu IT Park', tagline: '', propertyCount: 0, image: '', description: '' },
+          { id: 'loc-mactan', slug: 'mactan-newtown', name: 'Mactan Newtown', tagline: '', propertyCount: 0, image: '', description: '' },
+          { id: 'loc-banilad', slug: 'banilad', name: 'Banilad', tagline: '', propertyCount: 0, image: '', description: '' },
+        ];
 
-  const handleAreaClick = (areaName: string) => {
-    if (onSelectLocation) {
-      onSelectLocation(areaName);
+  const handleAreaClick = (area: LocationHighlight) => {
+    if (onSelectNeighborhood) {
+      onSelectNeighborhood(area);
+    } else if (onSelectLocation) {
+      onSelectLocation(area.name);
     } else {
       onNavClick('locations');
     }
@@ -146,7 +158,7 @@ export const Footer: React.FC<FooterProps> = ({
                     onClick={() => onNavClick('locations')}
                     className="hover:text-white transition-colors whitespace-nowrap"
                   >
-                    Top Locations
+                    Neighborhood &amp; Areas
                   </button>
                 </li>
                 <li>
@@ -161,21 +173,24 @@ export const Footer: React.FC<FooterProps> = ({
               </ul>
             </div>
 
-            {/* Locations */}
+            {/* Neighborhood & Areas */}
             <div>
               <h4 className="text-xs font-bold uppercase tracking-[0.15em] text-[#C6A878] mb-4">
-                Featured Areas
+                Neighborhood &amp; Areas
               </h4>
               <ul className="space-y-2.5 text-xs sm:text-sm text-white/70">
-                {featuredAreas.map((areaName) => (
-                  <li key={areaName}>
-                    <button
-                      type="button"
-                      onClick={() => handleAreaClick(areaName)}
-                      className="hover:text-white transition-colors text-left"
+                {featuredAreas.map((area) => (
+                  <li key={area.id}>
+                    <a
+                      href={buildNeighborhoodPath(area)}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        handleAreaClick(area);
+                      }}
+                      className="hover:text-white transition-colors text-left inline-block"
                     >
-                      {areaName}
-                    </button>
+                      {area.name}
+                    </a>
                   </li>
                 ))}
               </ul>

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Building2, MapPin, Tag, Search, ChevronDown, Check } from 'lucide-react';
 import { PropertyType, PropertyFilter, LocationHighlight } from '../types/property';
+import { isNeighborhoodPubliclyVisible } from '../utils/contentManagement';
 
 const PROPERTY_TYPES: PropertyType[] = [
   'All Types',
@@ -55,8 +56,9 @@ export const FloatingSearchBar: React.FC<FloatingSearchBarProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const locationOptions = useMemo(() => {
-    if (locations && locations.length > 0) {
-      return ['All Areas', ...locations.map((l) => l.name)];
+    const visible = (locations || []).filter(isNeighborhoodPubliclyVisible);
+    if (visible.length > 0) {
+      return ['All Areas', ...visible.map((l) => l.name)];
     }
     return INITIAL_LOCATIONS;
   }, [locations]);
@@ -174,7 +176,7 @@ export const FloatingSearchBar: React.FC<FloatingSearchBarProps> = ({
                 </div>
                 <div className="flex flex-col min-w-0">
                   <span className="text-[10px] sm:text-[11px] font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                    Location
+                    Neighborhood &amp; Areas
                   </span>
                   <span className="text-xs sm:text-sm font-semibold text-[#17243B] whitespace-nowrap truncate">
                     {filter.location}

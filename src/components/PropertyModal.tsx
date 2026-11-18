@@ -20,15 +20,20 @@ import {
 } from 'lucide-react';
 import { PropertyDoc } from '../types/property';
 import { formatPHP, canManagePropertyPhotos } from '../utils/filterProperties';
-import { uploadPropertyPhoto } from '../services/storageService';
+import {
+  uploadPropertyPhoto,
+  deleteUnreferencedStorageImages,
+} from '../services/storageService';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
+import { recordAuditLog } from '../services/auditLogService';
 
 interface PropertyModalProps {
   property: PropertyDoc | null;
   onClose: () => void;
   isFavorite: boolean;
+  otherReferencedImageUrls?: Set<string>;
   onToggleFavorite: (id: string) => void;
   onInquireAboutProperty: (title: string) => void;
   onPropertyUpdated?: (updated: PropertyDoc) => void;
@@ -38,14 +43,16 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   property,
   onClose,
   isFavorite,
+  otherReferencedImageUrls,
   onToggleFavorite,
   onInquireAboutProperty,
   onPropertyUpdated,
 }) => {
-  const { user, isSuperAdmin } = useAuth();
+  const { user, profile, isSuperAdmin, isEditor } = useAuth();
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeletingPhoto, setIsDeletingPhoto] = useState(false);
+  const [confirmDeletePhotoIndex, setConfirmDeletePhotoIndex] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -53,13 +60,14 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   useEffect(() => {
     setActiveImageIndex(0);
     setIsFullscreen(false);
+    setConfirmDeletePhotoIndex(null);
     setUploadError(null);
   }, [property?.propertyId]);
 
   if (!property) return null;
 
-  // Role Gate: strictly master authority (isSuperAdmin) or the agent who created this listing
-  const canManagePhotos = canManagePropertyPhotos(user?.uid, isSuperAdmin, property);
+  // Role Gate: Super Admin, Editorial Staff, or owning Agent
+  const canManagePhotos = canManagePropertyPhotos(user?.uid, isSuperAdmin, property, isEditor);
 
   const images =
     property.images && property.images.length > 0
@@ -79,12 +87,14 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
   const handleDeletePhoto = async (indexToDelete: number) => {
     if (!canManagePhotos) return;
     if (images.length <= 1) {
-      alert('A property must have at least one photograph.');
+      setUploadError('A property must have at least one photograph.');
+      setConfirmDeletePhotoIndex(null);
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this photo from the property gallery?')) return;
 
+    const deletedUrl = images[indexToDelete];
     setIsDeletingPhoto(true);
+    setUploadError(null);
     try {
       const newImages = images.filter((_, idx) => idx !== indexToDelete);
       const propertyRef = doc(db, 'properties', property.propertyId);
@@ -92,6 +102,25 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         images: newImages,
         updatedAt: new Date().toISOString(),
       });
+
+      if (!isEditor && otherReferencedImageUrls && deletedUrl && !newImages.includes(deletedUrl)) {
+        await deleteUnreferencedStorageImages([deletedUrl], otherReferencedImageUrls);
+      }
+
+      if (isEditor || isSuperAdmin) {
+        await recordAuditLog({
+          user,
+          editorEmail: user?.email || undefined,
+          editorName: profile?.displayName || undefined,
+          editorRole: isSuperAdmin ? 'superadmin' : 'editor',
+          contentType: 'property',
+          contentId: property.propertyId,
+          contentTitle: property.propertyTitle,
+          action: 'upload_photo',
+          changedFields: ['images'],
+          summary: `Removed image ${indexToDelete + 1} from gallery of "${property.propertyTitle}"`,
+        });
+      }
 
       const updatedProperty: PropertyDoc = {
         ...property,
@@ -102,10 +131,11 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
       if (onPropertyUpdated) {
         onPropertyUpdated(updatedProperty);
       }
+      setConfirmDeletePhotoIndex(null);
       setActiveImageIndex(Math.max(0, indexToDelete - 1));
     } catch (err: any) {
       console.error('Error deleting photo:', err);
-      alert('Failed to delete photo: ' + (err.message || 'Permission denied'));
+      setUploadError('Failed to delete photo: ' + (err.message || 'Permission denied'));
     } finally {
       setIsDeletingPhoto(false);
     }
@@ -139,6 +169,21 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
         images: newImages,
         updatedAt: new Date().toISOString(),
       });
+
+      if (isEditor || isSuperAdmin) {
+        await recordAuditLog({
+          user,
+          editorEmail: user?.email || undefined,
+          editorName: profile?.displayName || undefined,
+          editorRole: isSuperAdmin ? 'superadmin' : 'editor',
+          contentType: 'property',
+          contentId: property.propertyId,
+          contentTitle: property.propertyTitle,
+          action: 'upload_photo',
+          changedFields: ['images'],
+          summary: `Uploaded new gallery image to "${property.propertyTitle}"`,
+        });
+      }
 
       const updatedProperty: PropertyDoc = {
         ...property,
@@ -381,7 +426,25 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
             </p>
           </div>
 
-          {/* Amenities & Highlights */}
+          {/* Features & Amenities */}
+          {property.features && property.features.length > 0 && (
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 mb-3">
+                Unit Features
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {property.features.map((feat, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs sm:text-sm text-slate-700">
+                    <div className="w-4 h-4 rounded-full bg-[#17243B]/10 flex items-center justify-center text-[#17243B] flex-shrink-0">
+                      <Check className="w-3 h-3" />
+                    </div>
+                    <span>{feat}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {property.amenities && property.amenities.length > 0 && (
             <div>
               <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 mb-3">
@@ -412,22 +475,46 @@ export const PropertyModal: React.FC<PropertyModalProps> = ({
                   <p className="text-[11px] text-slate-500 mt-0.5">
                     {isSuperAdmin
                       ? 'Master Authority: You have full access to add and delete photos on this property.'
+                      : isEditor
+                      ? 'Editorial Staff: You can upload new gallery photos or remove them from the active display.'
                       : 'Listing Agent: You can add and manage photos for your assigned listing.'}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {images.length > 1 && (
-                    <button
-                      type="button"
-                      disabled={isDeletingPhoto}
-                      onClick={() => handleDeletePhoto(activeImageIndex)}
-                      className="px-3.5 min-h-[40px] rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
-                      title="Delete currently displayed photo"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{isDeletingPhoto ? 'Deleting...' : 'Delete Active Photo'}</span>
-                    </button>
+                    confirmDeletePhotoIndex === activeImageIndex ? (
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={isDeletingPhoto}
+                          onClick={() => handleDeletePhoto(activeImageIndex)}
+                          className="px-3.5 min-h-[40px] rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>{isDeletingPhoto ? 'Updating...' : isEditor && !isSuperAdmin ? 'Confirm Remove' : 'Confirm Delete'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isDeletingPhoto}
+                          onClick={() => setConfirmDeletePhotoIndex(null)}
+                          className="px-3 min-h-[40px] rounded-full border border-slate-300 text-slate-600 hover:bg-slate-100 text-xs font-semibold whitespace-nowrap"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isDeletingPhoto}
+                        onClick={() => setConfirmDeletePhotoIndex(activeImageIndex)}
+                        className="px-3.5 min-h-[40px] rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        title={isEditor && !isSuperAdmin ? 'Remove active photo from listing gallery' : 'Delete currently displayed photo'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span>{isEditor && !isSuperAdmin ? 'Remove Active Photo' : 'Delete Active Photo'}</span>
+                      </button>
+                    )
                   )}
 
                   <input

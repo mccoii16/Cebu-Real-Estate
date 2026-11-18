@@ -13,11 +13,39 @@ export type PropertyLocation =
   | 'Mandaue'
   | 'Lapu-Lapu City';
 
-export type PropertyStatus = 'draft' | 'pending' | 'approved' | 'rejected';
+export type PropertyStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'archived';
+
+export type ContentPublishStatus = 'published' | 'unpublished' | 'archived';
 
 export type Property = PropertyDoc;
 
-export type UserRole = 'superadmin' | 'agent' | 'user';
+export type UserRole = 'superadmin' | 'editor' | 'agent' | 'user';
+
+export type AuditAction =
+  | 'create'
+  | 'update'
+  | 'publish'
+  | 'unpublish'
+  | 'archive'
+  | 'restore'
+  | 'upload_photo';
+
+export type AuditContentType = 'property' | 'building' | 'neighborhood';
+
+export interface AuditLogDoc {
+  logId: string;
+  editorId: string;
+  editorEmail: string;
+  editorName: string;
+  editorRole: 'editor' | 'superadmin';
+  contentType: AuditContentType;
+  contentId: string;
+  contentTitle: string;
+  action: AuditAction;
+  changedFields: string[];
+  summary: string;
+  timestamp: string;
+}
 
 export interface UserProfile {
   uid: string;
@@ -39,10 +67,14 @@ export interface UserProfile {
   disabledBy?: string;
   deletedAt?: string;
   deletedBy?: string;
+  passwordResetRequestedAt?: string;
+  passwordResetRequestedBy?: string;
+  lastPasswordResetLink?: string;
 }
 
 export interface PropertyDoc {
   propertyId: string;
+  slug?: string;
   buildingId: string;
   buildingName: string;
   propertyTitle: string;
@@ -54,11 +86,24 @@ export interface PropertyDoc {
   bedrooms: number;
   bathrooms: number;
   floorArea: number;
+  lotArea?: number | null;
+  parkingSpaces?: number | null;
+  furnishingStatus?: string;
+  floorLevel?: string;
+  availabilityLabel?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  mapUrl?: string;
   description: string;
+  features?: string[];
   amenities: string[];
   images: string[];
+  seoTitle?: string;
+  seoDescription?: string;
   featured: boolean;
   status: PropertyStatus;
+  previousStatus?: Exclude<PropertyStatus, 'archived'> | null;
+  archivedAt?: string | null;
   agentId: string;
   agentName: string;
   rejectionReason?: string | null;
@@ -69,18 +114,37 @@ export interface PropertyDoc {
   approvedBy?: string | null;
   hasPendingReview?: boolean;
   pendingChanges?: Partial<PropertyDoc> | null;
+  lastModifiedByUid?: string;
+  lastModifiedByEmail?: string;
 }
 
 export interface BuildingDoc {
   buildingId: string;
+  slug?: string;
   buildingName: string;
   location: string;
   address: string;
   description: string;
+  developer?: string;
+  buildingType?: string;
+  yearCompleted?: number | null;
+  totalFloors?: number | null;
   buildingImages: string[];
   amenities: string[];
+  facilities?: string[];
+  nearbyLandmarks?: string[];
+  latitude?: number | null;
+  longitude?: number | null;
+  mapUrl?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  status?: ContentPublishStatus;
+  previousStatus?: 'published' | 'unpublished' | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  lastModifiedByUid?: string;
+  lastModifiedByEmail?: string;
 }
 
 export interface PropertyFilter {
@@ -97,11 +161,30 @@ export interface PropertyFilter {
 
 export interface LocationHighlight {
   id: string;
+  slug?: string;
   name: string;
   tagline: string;
   propertyCount: number;
   image: string;
+  galleryImages?: string[];
   description: string;
+  cityOrMunicipality?: string;
+  highlights?: string[];
+  nearbyLandmarks?: string[];
+  lifestyleInfo?: string;
+  transportationInfo?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  mapUrl?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  status?: ContentPublishStatus;
+  previousStatus?: 'published' | 'unpublished' | null;
+  archivedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  lastModifiedByUid?: string;
+  lastModifiedByEmail?: string;
 }
 
 export interface InquiryFormData {

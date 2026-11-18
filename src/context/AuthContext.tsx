@@ -15,6 +15,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   isSuperAdmin: boolean;
+  isEditor: boolean;
   isAgent: boolean;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
@@ -35,42 +36,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authError, setAuthError] = useState<string | null>(null);
 
   const fetchProfile = async (currentUser: User) => {
+    let tokenClaimRole: string | undefined;
     try {
-      let data: any = null;
-      try {
-        const token = await currentUser.getIdToken(true);
-        const res = await fetch('/api/auth/me', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (res.ok) {
-          data = await res.json();
-        } else {
-          console.warn('[AuthContext] Backend /api/auth/me responded with status', res.status);
-        }
-      } catch (fetchErr: any) {
-        console.warn('[AuthContext] Local or static deployment - bypassing backend API:', fetchErr.message);
+      const idTokenResult = await currentUser.getIdTokenResult(true);
+      if (typeof idTokenResult?.claims?.role === 'string') {
+        tokenClaimRole = idTokenResult.claims.role;
       }
-
-      if (data && data.status === 'disabled') {
-        await firebaseSignOut(auth);
-        setUser(null);
-        setProfile(null);
-        setAuthError('Your Agent account has been deactivated by the Super Administrator.');
-        return;
-      }
-
-      if (data && data.role) {
-        setProfile(data);
-        return;
-      }
-    } catch (err: any) {
-      console.warn('[AuthContext] Profile fetch warning:', err.message);
+    } catch {
+      // Ignore token claim lookup errors
     }
 
-    // Direct Firestore lookup by UID and Email
+    // 1. Direct Firestore lookup by UID & Email (authoritative status/role)
     try {
       const { doc, getDoc, collection, query, where, getDocs } = await import('firebase/firestore');
       const { db } = await import('../services/firebase');
@@ -79,11 +55,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userSnap = await getDoc(userDocRef);
       if (userSnap.exists()) {
         const uData = userSnap.data() as UserProfile;
-        if (uData.status === 'disabled') {
+        if (uData.status === 'disabled' || uData.status === 'deleted') {
           await firebaseSignOut(auth);
           setUser(null);
           setProfile(null);
-          setAuthError('Your Agent account has been deactivated by the Super Administrator.');
+          setAuthError('Your account access has been deactivated or removed by the Super Administrator.');
           return;
         }
         setProfile(uData);
@@ -95,11 +71,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const qSnap = await getDocs(q);
         if (!qSnap.empty) {
           const uData = qSnap.docs[0].data() as UserProfile;
-          if (uData.status === 'disabled') {
+          if (uData.status === 'disabled' || uData.status === 'deleted') {
             await firebaseSignOut(auth);
             setUser(null);
             setProfile(null);
-            setAuthError('Your Agent account has been deactivated by the Super Administrator.');
+            setAuthError('Your account access has been deactivated or removed by the Super Administrator.');
             return;
           }
           setProfile({ ...uData, uid: currentUser.uid });
@@ -110,13 +86,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('[AuthContext] Firestore direct profile read notice:', fsErr);
     }
 
-    // Direct, resilient authentication profile fallback
+    // 2. Backend /api/auth/me check
+    try {
+      let data: any = null;
+      try {
+        const token = await currentUser.getIdToken();
+        const res = await fetch('/api/auth/me', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (res.status === 403) {
+          await firebaseSignOut(auth);
+          setUser(null);
+          setProfile(null);
+          setAuthError('Your account access has been deactivated or removed by the Super Administrator.');
+          return;
+        }
+
+        if (res.ok) {
+          data = await res.json();
+        }
+      } catch (fetchErr: any) {
+        console.warn('[AuthContext] Local or static deployment - bypassing backend API:', fetchErr.message);
+      }
+
+      if (data && (data.status === 'disabled' || data.status === 'deleted')) {
+        await firebaseSignOut(auth);
+        setUser(null);
+        setProfile(null);
+        setAuthError('Your account access has been deactivated or removed by the Super Administrator.');
+        return;
+      }
+
+      if (data && data.role) {
+        setProfile(data);
+        return;
+      }
+    } catch (err: any) {
+      console.warn('[AuthContext] Profile fetch warning:', err.message);
+    }
+
+    // 3. Verified claim / Master Owner fallback (never self-promotes to editor or superadmin)
     const isOwner = currentUser.email?.toLowerCase() === 'martiligando@gmail.com';
+    const resolvedRole = isOwner
+      ? 'superadmin'
+      : tokenClaimRole === 'editor'
+      ? 'editor'
+      : tokenClaimRole === 'agent'
+      ? 'agent'
+      : 'agent';
+
     setProfile({
       uid: currentUser.uid,
       email: currentUser.email || '',
-      displayName: currentUser.displayName || (isOwner ? 'Super Admin' : 'Agent'),
-      role: isOwner ? 'superadmin' : 'agent',
+      displayName:
+        currentUser.displayName ||
+        (resolvedRole === 'superadmin'
+          ? 'Super Admin'
+          : resolvedRole === 'editor'
+          ? 'Editorial Staff'
+          : 'Agent'),
+      role: resolvedRole,
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -171,6 +203,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Email sign in notice:', err);
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         setAuthError('Invalid email or password. Please verify your credentials.');
+      } else if (err.code === 'auth/user-disabled') {
+        setAuthError('Your account has been disabled by the Super Administrator.');
       } else if (err.code === 'auth/unauthorized-domain') {
         const currentDomain = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
         setAuthError(`Firebase: Error (auth/unauthorized-domain). The domain "${currentDomain}" needs to be authorized in Firebase Console.`);
@@ -201,7 +235,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profile?.role === 'superadmin' ||
     user?.email?.toLowerCase() === 'martiligando@gmail.com';
 
-  const isAgent = profile?.role === 'agent';
+  const isEditor =
+    !isSuperAdmin &&
+    profile?.role === 'editor' &&
+    profile?.status !== 'disabled' &&
+    profile?.status !== 'deleted';
+
+  const isAgent =
+    !isSuperAdmin &&
+    !isEditor &&
+    profile?.role === 'agent' &&
+    profile?.status !== 'disabled' &&
+    profile?.status !== 'deleted';
 
   return (
     <AuthContext.Provider
@@ -210,6 +255,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         loading,
         isSuperAdmin,
+        isEditor,
         isAgent,
         signInWithGoogle,
         signInWithEmail,

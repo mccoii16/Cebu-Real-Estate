@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Building2,
   Plus,
@@ -11,14 +11,16 @@ import {
   Eye,
   LogOut,
   ExternalLink,
-  ShieldAlert,
-  ArrowRight,
+  Archive,
 } from 'lucide-react';
 import { PropertyDoc, BuildingDoc, LocationHighlight } from '../../types/property';
 import { useAuth } from '../../context/AuthContext';
 import { AddPropertyModal } from './AddPropertyModal';
+import { ConfirmActionModal } from './ConfirmActionModal';
 import { doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
+import { deleteUnreferencedStorageImages } from '../../services/storageService';
+import { collectAllReferencedImageUrls } from '../../utils/contentManagement';
 
 interface AgentDashboardProps {
   properties: PropertyDoc[];
@@ -40,12 +42,13 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
   onSelectPropertyPreview,
 }) => {
   const { user, profile, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState<'properties' | 'profile'>('properties');
   const [filterStatus, setFilterStatus] = useState<'all' | 'approved' | 'pending' | 'draft' | 'rejected'>('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState<PropertyDoc | null>(null);
+  const [confirmDeleteProp, setConfirmDeleteProp] = useState<PropertyDoc | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Filter properties belonging to this agent
   const myProperties = properties.filter(
     (p) => p.agentId === user?.uid || p.agentId === 'agent-01'
   );
@@ -56,17 +59,37 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
   const rejectedCount = myProperties.filter((p) => p.status === 'rejected').length;
 
   const displayedProperties = myProperties.filter((p) => {
-    if (filterStatus === 'all') return true;
+    if (filterStatus === 'all') return p.status !== 'archived';
     return p.status === filterStatus;
   });
 
-  const handleDeleteDraft = async (propertyId: string) => {
-    if (!window.confirm('Are you sure you want to delete this draft listing?')) return;
+  const getOtherReferencedUrls = (excludePropId?: string) =>
+    collectAllReferencedImageUrls({
+      properties: properties.filter((p) => p.propertyId !== excludePropId),
+      buildings,
+      locations,
+    });
+
+  const otherReferencedUrlsForModal = useMemo(
+    () => getOtherReferencedUrls(editingProperty?.propertyId),
+    [properties, buildings, locations, editingProperty?.propertyId]
+  );
+
+  const handleConfirmDeleteDraft = async () => {
+    if (!confirmDeleteProp) return;
+    setIsDeleting(true);
+    setActionError(null);
     try {
-      await deleteDoc(doc(db, 'properties', propertyId));
-      onPropertyDeleted(propertyId);
+      await deleteDoc(doc(db, 'properties', confirmDeleteProp.propertyId));
+      const otherRefs = getOtherReferencedUrls(confirmDeleteProp.propertyId);
+      await deleteUnreferencedStorageImages(confirmDeleteProp.images || [], otherRefs);
+      onPropertyDeleted(confirmDeleteProp.propertyId);
+      setConfirmDeleteProp(null);
     } catch (err: any) {
-      alert(`Could not delete draft: ${err.message}`);
+      setActionError(`Could not delete draft: ${err.message}`);
+      setConfirmDeleteProp(null);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -100,6 +123,14 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">
           <XCircle className="w-3.5 h-3.5 text-rose-600" />
           <span>Rejected</span>
+        </span>
+      );
+    }
+    if (status === 'archived') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-200 text-slate-700">
+          <Archive className="w-3.5 h-3.5 text-slate-500" />
+          <span>Archived</span>
         </span>
       );
     }
@@ -153,6 +184,22 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
 
       {/* Main Container */}
       <main className="max-w-7xl w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 flex-1 space-y-6 sm:space-y-8">
+        {actionError && (
+          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{actionError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionError(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Metric Cards Overview */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
@@ -233,7 +280,7 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
           <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
             {(
               [
-                { id: 'all', label: `All Listings (${myProperties.length})` },
+                { id: 'all', label: `Active Listings (${myProperties.filter((p) => p.status !== 'archived').length})` },
                 { id: 'approved', label: `Approved (${approvedCount})` },
                 { id: 'pending', label: `Pending Review (${pendingCount})` },
                 { id: 'draft', label: `Drafts (${draftCount})` },
@@ -241,6 +288,7 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
               ] as const
             ).map((f) => (
               <button
+                type="button"
                 key={f.id}
                 onClick={() => setFilterStatus(f.id)}
                 className={`px-3.5 py-1.5 rounded-full font-semibold transition-colors whitespace-nowrap ${
@@ -262,7 +310,6 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                   key={property.propertyId}
                   className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col justify-between group"
                 >
-                  {/* Photo & Badge */}
                   <div className="relative aspect-[16/10] bg-slate-100 overflow-hidden">
                     <img
                       src={property.images[0] || '/assets/extracted/photo_the_alcoves.png'}
@@ -277,7 +324,6 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* Information & Rejection Notice */}
                   <div className="p-5 flex-1 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="text-[11px] font-bold text-[#C6A878] uppercase tracking-wider">
@@ -291,30 +337,22 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                       </p>
                     </div>
 
-                    {/* Rejection Notice Banner */}
                     {property.status === 'rejected' && property.rejectionReason && (
                       <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-1">
                         <div className="font-bold flex items-center gap-1.5 text-rose-700">
                           <AlertCircle className="w-3.5 h-3.5" />
                           <span>Administrator Rejection Reason:</span>
                         </div>
-                        <p className="text-slate-700 italic">
-                          &quot;{property.rejectionReason}&quot;
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          Please click &quot;Edit & Resubmit&quot; to make corrections.
-                        </p>
+                        <p className="text-slate-700 italic">&quot;{property.rejectionReason}&quot;</p>
                       </div>
                     )}
 
-                    {/* Pending review notice on approved property */}
                     {property.status === 'approved' && property.hasPendingReview && (
                       <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">
                         Pending revisions submitted to Super Admin. Live listing continues to display previous approved details until accepted.
                       </div>
                     )}
 
-                    {/* Action Buttons */}
                     <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
                       <button
                         type="button"
@@ -326,8 +364,7 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                       </button>
 
                       <div className="flex items-center gap-2">
-                        {/* Draft & Rejected Edit */}
-                        {property.status !== 'approved' && (
+                        {property.status !== 'approved' && property.status !== 'archived' && (
                           <button
                             type="button"
                             onClick={() => {
@@ -341,7 +378,6 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                           </button>
                         )}
 
-                        {/* Approved property revision */}
                         {property.status === 'approved' && (
                           <button
                             type="button"
@@ -356,12 +392,12 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
                           </button>
                         )}
 
-                        {/* Delete draft only */}
                         {property.status === 'draft' && (
                           <button
                             type="button"
-                            onClick={() => handleDeleteDraft(property.propertyId)}
+                            onClick={() => setConfirmDeleteProp(property)}
                             title="Delete draft"
+                            aria-label={`Delete draft ${property.propertyTitle}`}
                             className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -396,7 +432,6 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
         </div>
       </main>
 
-      {/* Add / Edit Property Modal */}
       <AddPropertyModal
         isOpen={isAddModalOpen}
         onClose={() => {
@@ -405,8 +440,25 @@ export const AgentDashboard: React.FC<AgentDashboardProps> = ({
         }}
         onSaved={onPropertyUpdated}
         editingProperty={editingProperty}
+        existingProperties={properties}
         buildings={buildings}
         locations={locations}
+        otherReferencedImageUrls={otherReferencedUrlsForModal}
+      />
+
+      <ConfirmActionModal
+        isOpen={Boolean(confirmDeleteProp)}
+        title="Delete Draft Listing"
+        message={
+          confirmDeleteProp
+            ? `Permanently delete draft "${confirmDeleteProp.propertyTitle}"? Any unshared photos uploaded for this draft will also be cleaned up.`
+            : ''
+        }
+        confirmLabel="Delete Draft"
+        isDestructive={true}
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDeleteDraft}
+        onCancel={() => setConfirmDeleteProp(null)}
       />
     </div>
   );

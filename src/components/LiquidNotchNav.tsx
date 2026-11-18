@@ -12,7 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home' },
   { id: 'properties', label: 'Properties' },
   { id: 'about', label: 'About' },
-  { id: 'locations', label: 'Locations' },
+  { id: 'locations', label: 'Neighborhood & Areas' },
   { id: 'contact', label: 'Contact' },
 ];
 
@@ -40,7 +40,7 @@ export const LiquidNotchNav: React.FC<LiquidNotchNavProps> = ({
               key={item.id}
               type="button"
               onClick={() => onTabChange(item.id)}
-              className={`relative px-2.5 xl:px-4 py-1.5 text-xs xl:text-sm font-medium transition-colors duration-200 z-10 flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] rounded-full whitespace-nowrap flex-nowrap shrink-0 ${
+              className={`relative px-2 xl:px-3.5 py-1.5 text-[11px] xl:text-sm font-medium transition-colors duration-200 z-10 flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] rounded-full whitespace-nowrap flex-nowrap shrink-0 ${
                 isActive
                   ? 'text-[#C6A878] font-semibold'
                   : 'text-white/80 hover:text-white'

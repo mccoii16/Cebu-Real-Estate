@@ -3,6 +3,7 @@ import { LocationHighlight } from '../types/property';
 export const LOCATIONS_DATA: LocationHighlight[] = [
   {
     id: 'loc-cbp',
+    slug: 'cebu-business-park',
     name: 'Cebu Business Park',
     tagline: 'Cebu’s Premier Central Business District',
     propertyCount: 24,
@@ -12,7 +13,8 @@ export const LOCATIONS_DATA: LocationHighlight[] = [
   },
   {
     id: 'loc-it-park',
-    name: 'IT Park',
+    slug: 'cebu-it-park',
+    name: 'Cebu IT Park',
     tagline: '24/7 Global Innovation & Tech Hub',
     propertyCount: 18,
     image: '/assets/extracted/loc_it_park.png',
@@ -21,6 +23,7 @@ export const LOCATIONS_DATA: LocationHighlight[] = [
   },
   {
     id: 'loc-mactan',
+    slug: 'mactan-newtown',
     name: 'Mactan Newtown',
     tagline: 'Island Resort Township & Coastal Living',
     propertyCount: 15,
@@ -30,6 +33,7 @@ export const LOCATIONS_DATA: LocationHighlight[] = [
   },
   {
     id: 'loc-banilad',
+    slug: 'banilad',
     name: 'Banilad',
     tagline: 'Prestigious Enclaves & Heritage Luxury',
     propertyCount: 11,

@@ -2,9 +2,11 @@ import React from 'react';
 import { Heart, MapPin, Bed, Bath, Maximize2, ArrowRight } from 'lucide-react';
 import { PropertyDoc } from '../types/property';
 import { formatPHP } from '../utils/filterProperties';
+import { buildPropertyPath } from '../utils/slugs';
 
 interface FeaturedPropertiesProps {
   properties: PropertyDoc[];
+  totalApprovedCount?: number;
   favorites: string[];
   onToggleFavorite: (id: string, e: React.MouseEvent) => void;
   onSelectProperty: (property: PropertyDoc) => void;
@@ -14,6 +16,7 @@ interface FeaturedPropertiesProps {
 
 export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
   properties,
+  totalApprovedCount,
   favorites,
   onToggleFavorite,
   onSelectProperty,
@@ -30,7 +33,7 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
             <span className="w-8 h-px bg-[#C6A878]" />
           </div>
           <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#17243B] font-sans">
-            Premium Properties in Cebu’s Best Locations
+            Premium Properties in Cebu’s Premier Neighborhood &amp; Areas
           </h2>
         </div>
 
@@ -38,7 +41,9 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
           onClick={onViewAllClick}
           className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#17243B] hover:text-[#C6A878] transition-colors group self-start sm:self-auto py-1 whitespace-nowrap flex-nowrap shrink-0"
         >
-          <span className="whitespace-nowrap">View All Properties ({properties.length})</span>
+          <span className="whitespace-nowrap">
+            View All Properties ({totalApprovedCount ?? properties.length})
+          </span>
           <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform flex-shrink-0" />
         </button>
       </div>
@@ -70,23 +75,17 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-3">
           {properties.map((property) => {
             const isFav = favorites.includes(property.propertyId);
+            const propertyUrl = buildPropertyPath(property);
             const primaryImage =
               property.images && property.images.length > 0
                 ? property.images[0]
                 : '/assets/extracted/the_alcoves.png';
 
             return (
-              <div
+              <article
                 key={property.propertyId}
-                tabIndex={0}
                 onClick={() => onSelectProperty(property)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onSelectProperty(property);
-                  }
-                }}
-                className="group relative rounded-2xl overflow-hidden bg-slate-900 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-[0_12px_32px_rgba(23,36,59,0.2)] hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col aspect-[4/3] sm:aspect-[344/242] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878]"
+                className="group relative rounded-2xl overflow-hidden bg-slate-900 shadow-[0_4px_20px_rgba(0,0,0,0.08)] hover:shadow-[0_12px_32px_rgba(23,36,59,0.2)] hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col aspect-[4/3] sm:aspect-[344/242]"
               >
                 {/* Background Property Image */}
                 <div className="absolute inset-0 overflow-hidden">
@@ -124,8 +123,17 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
                   </button>
                 </div>
 
-                {/* Bottom Property Information */}
-                <div className="relative z-10 mt-auto p-3.5 sm:p-4 flex flex-col justify-end">
+                {/* Bottom Property Information (Semantic Link) */}
+                <a
+                  href={propertyUrl}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectProperty(property);
+                  }}
+                  aria-label={`${property.propertyTitle} - ${formatPHP(property.price, property.listingType === 'rent')}`}
+                  className="relative z-10 mt-auto p-3.5 sm:p-4 flex flex-col justify-end focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C6A878] rounded-b-2xl"
+                >
                   <div className="flex items-end justify-between gap-2 mb-1">
                     <h3 className="text-sm sm:text-base font-bold text-white tracking-tight line-clamp-1 group-hover:text-[#DFCDAA] transition-colors min-w-0">
                       {property.propertyTitle}
@@ -156,8 +164,8 @@ export const FeaturedProperties: React.FC<FeaturedPropertiesProps> = ({
                       <span className="tabular-nums">{property.floorArea} sqm</span>
                     </div>
                   </div>
-                </div>
-              </div>
+                </a>
+              </article>
             );
           })}
         </div>

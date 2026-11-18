@@ -11,7 +11,7 @@ interface HeaderProps {
   favoriteCount: number;
   onOpenFavorites: () => void;
   onOpenPortal: () => void;
-  userRole?: 'superadmin' | 'agent' | null;
+  userRole?: 'superadmin' | 'editor' | 'agent' | null;
   userDisplayName?: string | null;
   siteSettings?: WebsiteSettings;
 }
@@ -42,7 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="relative z-40 w-full px-3 sm:px-6 lg:px-6 xl:px-12 py-4 sm:py-5 flex items-center justify-between gap-2">
       {/* Brand Logo */}
       <a
-        href="#"
+        href="/"
         onClick={(e) => {
           e.preventDefault();
           onTabChange('home');
@@ -145,6 +145,8 @@ export const Header: React.FC<HeaderProps> = ({
           className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 xl:px-3.5 min-h-[36px] rounded-full border text-[11px] xl:text-xs font-semibold tracking-wide whitespace-nowrap shrink-0 leading-none transition-all duration-200 ${
             userRole === 'superadmin'
               ? 'bg-[#C6A878] text-[#17243B] border-[#C6A878] hover:bg-[#b89764] shadow-sm'
+              : userRole === 'editor'
+              ? 'bg-indigo-500/25 text-white border-indigo-300/40 hover:bg-indigo-500/35'
               : userRole === 'agent'
               ? 'bg-white/20 text-white border-white/30 hover:bg-white/30'
               : 'border-white/20 bg-white/10 text-white/90 hover:text-white hover:bg-white/20'
@@ -158,6 +160,8 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="whitespace-nowrap">
             {userRole === 'superadmin'
               ? 'Admin Panel'
+              : userRole === 'editor'
+              ? 'Editor Desk'
               : userRole === 'agent'
               ? 'Agent Desk'
               : 'Portal'}
@@ -195,7 +199,7 @@ export const Header: React.FC<HeaderProps> = ({
                 { id: 'home', label: 'Home' },
                 { id: 'properties', label: 'Properties' },
                 { id: 'about', label: 'About Us' },
-                { id: 'locations', label: 'Top Locations' },
+                { id: 'locations', label: 'Neighborhood & Areas' },
                 { id: 'contact', label: 'Contact & Inquiries' },
               ] as const
             ).map((tab) => (
@@ -226,6 +230,8 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="whitespace-nowrap">
                   {userRole === 'superadmin'
                     ? 'Super Admin Dashboard'
+                    : userRole === 'editor'
+                    ? 'Editor Workspace'
                     : userRole === 'agent'
                     ? 'Agent Workspace'
                     : 'Staff & Agent Portal'}

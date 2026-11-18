@@ -1,0 +1,73 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(ai-studio-cebuprimepropert-cc92c71f-1cf1-4346-af2d-433e14c61d77)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() &&
+        firestore.exists(/databases/(ai-studio-cebuprimepropert-cc92c71f-1cf1-4346-af2d-433e14c61d77)/documents/users/$(request.auth.uid));
+    }
+
+    function isUserDisabledOrDeleted() {
+      return hasUserDoc() && userDoc().status in ['disabled', 'deleted'];
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'martiligando@gmail.com') ||
+        (!isUserDisabledOrDeleted() && (
+          request.auth.token.role == 'superadmin' ||
+          (hasUserDoc() && userDoc().role == 'superadmin')
+        ))
+      );
+    }
+
+    function isEditor() {
+      return isSignedIn() && !isUserDisabledOrDeleted() && (
+        request.auth.token.role == 'editor' ||
+        (hasUserDoc() && userDoc().role == 'editor')
+      );
+    }
+
+    function isAgent() {
+      return isSignedIn() && !isUserDisabledOrDeleted() && (
+        request.auth.token.role == 'agent' ||
+        (hasUserDoc() && userDoc().role == 'agent')
+      );
+    }
+
+    function isValidImageUpload() {
+      return request.resource != null &&
+             request.resource.size <= 10 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/.*');
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Property photographs
+    match /properties/{propertyId}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if isValidImageUpload() && (isAdmin() || isEditor() || isAgent());
+      allow delete: if isAdmin() || isAgent();
+    }
+
+    // Editorial assets: Editors may upload Building & Neighborhood media only; cannot delete or modify homepage hero assets
+    match /site_assets/{folder}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if isValidImageUpload() && (
+        isAdmin() ||
+        (isEditor() && (folder.matches('^buildings-.*') || folder.matches('^neighborhoods-.*')))
+      );
+      allow delete: if isAdmin();
+    }
+  }
+}

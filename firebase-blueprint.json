@@ -10,6 +10,11 @@
           "description": "Unique identifier for the property",
           "maxLength": 128
         },
+        "slug": {
+          "type": "string",
+          "description": "Unique readable URL slug for /properties/:slug",
+          "maxLength": 160
+        },
         "buildingId": {
           "type": "string",
           "description": "Identifier of the parent building",
@@ -61,10 +66,50 @@
           "type": "number",
           "description": "Floor area in square meters (sqm)"
         },
+        "lotArea": {
+          "type": "number",
+          "description": "Lot area in square meters (optional)"
+        },
+        "parkingSpaces": {
+          "type": "number",
+          "description": "Allocated parking slots (optional)"
+        },
+        "furnishingStatus": {
+          "type": "string",
+          "description": "Furnishing status (e.g., Fully Furnished, Semi-Furnished, Unfurnished)",
+          "maxLength": 80
+        },
+        "floorLevel": {
+          "type": "string",
+          "description": "Floor or storey level (optional)",
+          "maxLength": 60
+        },
+        "availabilityLabel": {
+          "type": "string",
+          "description": "Listing availability state (e.g., Available, Ready for Occupancy, Reserved)",
+          "maxLength": 80
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Map latitude coordinate (optional)"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Map longitude coordinate (optional)"
+        },
+        "mapUrl": {
+          "type": "string",
+          "description": "Google Maps URL or embed link (optional)",
+          "maxLength": 500
+        },
         "description": {
           "type": "string",
           "description": "Detailed architectural prose",
           "maxLength": 3000
+        },
+        "features": {
+          "type": "array",
+          "description": "Distinctive unit & interior features"
         },
         "amenities": {
           "type": "array",
@@ -74,6 +119,16 @@
           "type": "array",
           "description": "Array of image URLs stored in Firebase Storage or high-res assets"
         },
+        "seoTitle": {
+          "type": "string",
+          "description": "Custom SEO page title",
+          "maxLength": 160
+        },
+        "seoDescription": {
+          "type": "string",
+          "description": "Custom SEO meta description",
+          "maxLength": 320
+        },
         "featured": {
           "type": "boolean",
           "description": "Whether highlighted on homepage"
@@ -81,7 +136,17 @@
         "status": {
           "type": "string",
           "description": "Publication workflow state",
+          "enum": ["draft", "pending", "approved", "rejected", "archived"]
+        },
+        "previousStatus": {
+          "type": "string",
+          "description": "Status before archiving",
           "enum": ["draft", "pending", "approved", "rejected"]
+        },
+        "archivedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when archived"
         },
         "agentId": {
           "type": "string",
@@ -157,6 +222,11 @@
           "description": "Unique building identifier",
           "maxLength": 128
         },
+        "slug": {
+          "type": "string",
+          "description": "Unique readable URL slug for /buildings/:slug",
+          "maxLength": 160
+        },
         "buildingName": {
           "type": "string",
           "description": "Name of the building",
@@ -177,6 +247,24 @@
           "description": "Architectural and developer summary",
           "maxLength": 3000
         },
+        "developer": {
+          "type": "string",
+          "description": "Real estate developer name",
+          "maxLength": 128
+        },
+        "buildingType": {
+          "type": "string",
+          "description": "Building classification",
+          "maxLength": 100
+        },
+        "yearCompleted": {
+          "type": "number",
+          "description": "Completion year"
+        },
+        "totalFloors": {
+          "type": "number",
+          "description": "Number of floors"
+        },
         "buildingImages": {
           "type": "array",
           "description": "Photographs of the building development"
@@ -184,6 +272,52 @@
         "amenities": {
           "type": "array",
           "description": "Shared building amenities"
+        },
+        "facilities": {
+          "type": "array",
+          "description": "Building facilities and services"
+        },
+        "nearbyLandmarks": {
+          "type": "array",
+          "description": "Nearby landmarks around the building"
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Map latitude coordinate"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Map longitude coordinate"
+        },
+        "mapUrl": {
+          "type": "string",
+          "description": "Google Maps URL",
+          "maxLength": 500
+        },
+        "seoTitle": {
+          "type": "string",
+          "description": "Custom SEO page title",
+          "maxLength": 160
+        },
+        "seoDescription": {
+          "type": "string",
+          "description": "Custom SEO meta description",
+          "maxLength": 320
+        },
+        "status": {
+          "type": "string",
+          "description": "Publication visibility state",
+          "enum": ["published", "unpublished", "archived"]
+        },
+        "previousStatus": {
+          "type": "string",
+          "description": "Status before archiving",
+          "enum": ["published", "unpublished"]
+        },
+        "archivedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when archived"
         },
         "createdAt": {
           "type": "string",
@@ -205,6 +339,40 @@
         "buildingImages",
         "amenities"
       ]
+    },
+    "Location": {
+      "title": "Neighborhood & Area",
+      "description": "A neighborhood or district guide across Metro Cebu",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "slug": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "maxLength": 128 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "cityOrMunicipality": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 3000 },
+        "image": { "type": "string", "maxLength": 1000 },
+        "galleryImages": { "type": "array", "description": "Additional neighborhood gallery images" },
+        "highlights": { "type": "array", "description": "Neighborhood key highlights" },
+        "nearbyLandmarks": { "type": "array", "description": "Nearby landmarks" },
+        "lifestyleInfo": { "type": "string", "maxLength": 3000 },
+        "transportationInfo": { "type": "string", "maxLength": 3000 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "mapUrl": { "type": "string", "maxLength": 500 },
+        "seoTitle": { "type": "string", "maxLength": 160 },
+        "seoDescription": { "type": "string", "maxLength": 320 },
+        "status": {
+          "type": "string",
+          "enum": ["published", "unpublished", "archived"]
+        },
+        "previousStatus": {
+          "type": "string",
+          "enum": ["published", "unpublished"]
+        },
+        "archivedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "tagline", "image", "description"]
     },
     "UserProfile": {
       "title": "UserProfile",
@@ -229,7 +397,7 @@
         "role": {
           "type": "string",
           "description": "Role classification",
-          "enum": ["superadmin", "agent"]
+          "enum": ["superadmin", "editor", "agent", "user"]
         },
         "status": {
           "type": "string",
@@ -253,6 +421,29 @@
         }
       },
       "required": ["uid", "email", "displayName", "role", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable editorial content change audit trail entry",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128 },
+        "editorId": { "type": "string", "maxLength": 128 },
+        "editorEmail": { "type": "string", "maxLength": 200 },
+        "editorName": { "type": "string", "maxLength": 150 },
+        "editorRole": { "type": "string", "enum": ["editor", "superadmin"] },
+        "contentType": { "type": "string", "enum": ["property", "building", "neighborhood"] },
+        "contentId": { "type": "string", "maxLength": 128 },
+        "contentTitle": { "type": "string", "maxLength": 200 },
+        "action": {
+          "type": "string",
+          "enum": ["create", "update", "publish", "unpublish", "archive", "restore", "upload_photo"]
+        },
+        "changedFields": { "type": "array", "description": "Field names modified in this change" },
+        "summary": { "type": "string", "maxLength": 500 },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "editorId", "editorEmail", "editorRole", "contentType", "contentId", "action", "timestamp"]
     },
     "Inquiry": {
       "title": "Inquiry",
@@ -313,25 +504,34 @@
       "schema": {
         "$ref": "#/entities/Property"
       },
-      "description": "Real estate listings. Publicly readable if status == 'approved'. Controllable by Super Admin and owning Agents."
+      "description": "Real estate listings. Publicly readable if status == 'approved'. Controllable by Super Admin, Editors (content/SEO/archive without approval bypass), and owning Agents."
     },
     "/buildings/{buildingId}": {
       "schema": {
         "$ref": "#/entities/Building"
       },
-      "description": "Towers and developments. Publicly readable. Modifiable only by Super Admin."
+      "description": "Towers and developments. Publicly readable. Creatable/updatable by Super Admin or Editor; deletable only by Super Admin."
     },
     "/users/{userId}": {
       "schema": {
         "$ref": "#/entities/UserProfile"
       },
-      "description": "Agent and Super Admin user accounts. Managed exclusively by Super Admin."
+      "description": "Super Admin, Editor, and Agent user accounts. Managed exclusively by Super Admin."
     },
     "/inquiries/{inquiryId}": {
       "schema": {
         "$ref": "#/entities/Inquiry"
       },
-      "description": "Client property inquiries and viewing requests. Creatable publicly, manageable by Super Admin."
+      "description": "Client property inquiries and viewing requests. Creatable publicly, manageable exclusively by Super Admin."
+    },
+    "/locations/{locationId}": {
+      "description": "Neighborhoods and areas metadata. Publicly readable, creatable/updatable by Super Admin or Editor, deletable only by Super Admin."
+    },
+    "/audit_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/AuditLog"
+      },
+      "description": "Immutable content change audit logs created by Editors/Super Admins. Readable exclusively by Super Admin."
     }
   }
 }

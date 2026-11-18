@@ -190,9 +190,10 @@ export function calculateAgentMetrics(properties: PropertyDoc[]) {
 export function canManagePropertyPhotos(
   userId: string | undefined,
   isSuperAdmin: boolean,
-  property: PropertyDoc
+  property: PropertyDoc,
+  isEditor = false
 ): boolean {
-  if (isSuperAdmin) return true;
+  if (isSuperAdmin || isEditor) return true;
   return Boolean(userId && property.agentId && userId === property.agentId);
 }
 

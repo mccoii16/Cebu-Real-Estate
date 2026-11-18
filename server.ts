@@ -35,9 +35,52 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json());
 
 // Auth Middleware: Verify Firebase ID Token
+type StaffRole = 'superadmin' | 'editor' | 'agent' | 'user';
+
 interface AuthenticatedRequest extends Request {
   user?: DecodedIdToken;
+  userRole?: StaffRole;
   isSuperAdmin?: boolean;
+  isEditor?: boolean;
+}
+
+async function resolveUserRoleAndStatus(
+  uid: string,
+  email: string,
+  tokenRole?: unknown
+): Promise<{ role: StaffRole; status: 'active' | 'disabled' | 'deleted'; displayName?: string }> {
+  const isOwnerEmail = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+  if (isOwnerEmail) {
+    return { role: 'superadmin', status: 'active' };
+  }
+
+  let role: StaffRole =
+    tokenRole === 'superadmin' || tokenRole === 'editor' || tokenRole === 'agent'
+      ? tokenRole
+      : 'user';
+  let status: 'active' | 'disabled' | 'deleted' = 'active';
+  let displayName: string | undefined;
+
+  if (fallbackUsers.has(uid)) {
+    const cached = fallbackUsers.get(uid)!;
+    role = cached.role;
+    status = cached.status;
+    displayName = cached.displayName;
+  }
+
+  try {
+    const snap = await adminDb.collection('users').doc(uid).get();
+    if (snap.exists) {
+      const data = snap.data();
+      if (data?.role) role = data.role as StaffRole;
+      if (data?.status) status = data.status;
+      if (data?.displayName) displayName = data.displayName;
+    }
+  } catch {
+    // Firestore Admin lookup may be bypassed in restricted dev environments
+  }
+
+  return { role, status, displayName };
 }
 
 async function authenticateToken(
@@ -58,12 +101,10 @@ async function authenticateToken(
       decodedToken = await adminAuth.verifyIdToken(token);
     } catch (adminErr: any) {
       console.warn('[Auth] adminAuth.verifyIdToken failed, checking token payload:', adminErr.message);
-      // Fallback decode when Identity Toolkit API is propagating or restricted in dev
       const parts = token.split('.');
       if (parts.length === 3) {
         const payloadStr = Buffer.from(parts[1], 'base64').toString('utf-8');
         const parsed = JSON.parse(payloadStr);
-        // Ensure token belongs to the valid Firebase project and is unexpired
         const now = Math.floor(Date.now() / 1000);
         if (
           (parsed.aud === PROJECT_ID || parsed.iss?.includes(PROJECT_ID)) &&
@@ -86,22 +127,27 @@ async function authenticateToken(
 
     req.user = decodedToken;
 
-    // Check if superadmin by email or claim
-    const isOwnerEmail =
-      decodedToken.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+    const email = decodedToken.email || '';
+    const isOwnerEmail = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
     const hasAdminClaim = (decodedToken as any).role === 'superadmin';
 
-    // Auto-bootstrap custom claim if the super admin signs in
     if (isOwnerEmail && !hasAdminClaim) {
       try {
         await adminAuth.setCustomUserClaims(decodedToken.uid, { role: 'superadmin' });
-        console.log(`[Auth] Bootstrap claim assigned to Super Admin ${decodedToken.email}`);
       } catch (claimErr: any) {
         console.warn('[Auth] Could not set custom claims via Admin SDK (will use email role):', claimErr.message);
       }
     }
 
-    req.isSuperAdmin = isOwnerEmail || hasAdminClaim;
+    const resolved = await resolveUserRoleAndStatus(decodedToken.uid, email, (decodedToken as any).role);
+    if (resolved.status === 'disabled' || resolved.status === 'deleted') {
+      res.status(403).json({ error: 'Account access has been disabled or removed.' });
+      return;
+    }
+
+    req.userRole = isOwnerEmail ? 'superadmin' : resolved.role;
+    req.isSuperAdmin = isOwnerEmail || req.userRole === 'superadmin';
+    req.isEditor = !req.isSuperAdmin && req.userRole === 'editor';
     next();
   } catch (err: any) {
     console.error('[Auth] Token verification failed:', err.message);
@@ -121,21 +167,35 @@ function requireSuperAdmin(
   next();
 }
 
+function requireEditorOrAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.isSuperAdmin && !req.isEditor) {
+    res.status(403).json({ error: 'Access denied: Editor or Super Admin permissions required' });
+    return;
+  }
+  next();
+}
+
 // --- IN-MEMORY FALLBACK REPOSITORIES ---
-// When the server environment does not have cross-project service account credentials for Firestore,
-// the server seamlessly preserves and serves data reliably without permission-denied crashes.
 interface UserRecordData {
   uid: string;
   email: string;
   displayName: string;
-  role: 'superadmin' | 'agent';
+  role: StaffRole;
   status: 'active' | 'disabled' | 'deleted';
   createdAt: string;
   updatedAt: string;
   temporaryPassword?: string;
   createdBy?: string;
   createdByEmail?: string;
+  passwordResetRequestedAt?: string;
+  passwordResetRequestedBy?: string;
 }
+
+const fallbackAuditLogs: any[] = [];
 
 const fallbackUsers: Map<string, UserRecordData> = new Map([
   [
@@ -219,11 +279,11 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
     const email = req.user!.email || '';
     const isOwner = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
 
-    let role: 'superadmin' | 'agent' = isOwner ? 'superadmin' : ((req.user as any)?.role || 'agent');
+    let role: StaffRole = isOwner ? 'superadmin' : (req.userRole || 'user');
     let status: 'active' | 'disabled' | 'deleted' = 'active';
-    let displayName = req.user!.name || email.split('@')[0] || (isOwner ? 'Super Admin' : 'Agent');
+    let displayName =
+      req.user!.name || email.split('@')[0] || (isOwner ? 'Super Admin' : 'Staff Member');
 
-    // Check memory store first
     if (fallbackUsers.has(uid)) {
       const cached = fallbackUsers.get(uid)!;
       role = cached.role;
@@ -231,14 +291,13 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
       displayName = cached.displayName;
     }
 
-    // Try Firestore Admin SDK if permitted, but gracefully bypass on permission errors
     try {
       const userDocRef = adminDb.collection('users').doc(uid);
       const userSnap = await userDocRef.get();
 
       if (userSnap.exists) {
         const data = userSnap.data();
-        role = data?.role || role;
+        role = (data?.role as StaffRole) || role;
         status = data?.status || status;
         displayName = data?.displayName || displayName;
       } else if (isOwner) {
@@ -255,7 +314,7 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
         }).catch(() => {});
       }
     } catch (dbErr: any) {
-      console.warn('[Firestore Admin] Firestore lookup bypassed due to IAM permissions (using token profile):', dbErr.message);
+      console.warn('[Firestore Admin] Firestore lookup bypassed due to IAM permissions:', dbErr.message);
     }
 
     res.json({
@@ -265,20 +324,23 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
       role,
       status,
       isSuperAdmin: role === 'superadmin' || isOwner,
+      isEditor: role === 'editor' && !isOwner,
       isAgent: role === 'agent' && !isOwner,
     });
   } catch (error: any) {
     console.error('Error in /api/auth/me:', error);
     const email = req.user?.email || '';
     const isOwner = email.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase();
+    const resolvedRole: StaffRole = isOwner ? 'superadmin' : (req.userRole || 'user');
     res.json({
       uid: req.user?.uid || 'user-fallback',
       email,
-      displayName: req.user?.name || (isOwner ? 'Super Admin' : 'Agent'),
-      role: isOwner ? 'superadmin' : 'agent',
+      displayName: req.user?.name || (isOwner ? 'Super Admin' : 'Staff Member'),
+      role: resolvedRole,
       status: 'active',
-      isSuperAdmin: isOwner,
-      isAgent: !isOwner,
+      isSuperAdmin: isOwner || resolvedRole === 'superadmin',
+      isEditor: resolvedRole === 'editor' && !isOwner,
+      isAgent: resolvedRole === 'agent' && !isOwner,
     });
   }
 });
@@ -506,6 +568,435 @@ app.delete(
     } catch (error: any) {
       console.error('Error deleting agent:', error);
       res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * GET /api/admin/editors
+ * Super Admin: List all Editor accounts.
+ */
+app.get(
+  '/api/admin/editors',
+  authenticateToken,
+  requireSuperAdmin,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      let editorsList: UserRecordData[] = [];
+
+      try {
+        const snap = await adminDb
+          .collection('users')
+          .where('role', '==', 'editor')
+          .get();
+        editorsList = snap.docs.map((d) => d.data() as UserRecordData);
+      } catch (dbErr: any) {
+        console.warn('[Admin] Firestore editors list bypassed due to IAM permissions:', dbErr.message);
+      }
+
+      if (editorsList.length === 0) {
+        editorsList = Array.from(fallbackUsers.values()).filter(
+          (u) => u.role === 'editor' && u.status !== 'deleted'
+        );
+      }
+
+      res.json({ editors: editorsList });
+    } catch (error: any) {
+      console.error('Error listing editors:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /api/admin/editors
+ * Super Admin: Create an Editor account with Firebase Auth and custom role claims.
+ */
+app.post(
+  '/api/admin/editors',
+  authenticateToken,
+  requireSuperAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { email, displayName, password, uid: providedUid } = req.body;
+      if (!email || !displayName) {
+        res.status(400).json({ error: 'Email and Display Name are required' });
+        return;
+      }
+
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const editorPassword =
+        password || `CebuEditor@${Math.floor(100000 + Math.random() * 900000)}`;
+      const now = new Date().toISOString();
+      let resolvedUid = providedUid ? String(providedUid).trim() : `editor-${Date.now()}`;
+      let claimAssigned = false;
+
+      try {
+        let userRecord;
+        try {
+          userRecord = await adminAuth.getUserByEmail(normalizedEmail);
+        } catch {
+          userRecord = await adminAuth.createUser({
+            email: normalizedEmail,
+            password: editorPassword,
+            displayName: String(displayName).trim(),
+            emailVerified: true,
+          });
+        }
+        resolvedUid = userRecord.uid;
+        await adminAuth.setCustomUserClaims(resolvedUid, { role: 'editor' });
+        claimAssigned = true;
+      } catch (authErr: any) {
+        console.warn('[Admin] Firebase Auth Editor provisioning note:', authErr.message);
+      }
+
+      const editorProfile: UserRecordData = {
+        uid: resolvedUid,
+        email: normalizedEmail,
+        displayName: String(displayName).trim(),
+        role: 'editor',
+        status: 'active',
+        temporaryPassword: editorPassword,
+        createdBy: req.user!.uid,
+        createdByEmail: req.user!.email,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      fallbackUsers.set(resolvedUid, editorProfile);
+
+      try {
+        await adminDb.collection('users').doc(resolvedUid).set(editorProfile, { merge: true });
+      } catch (dbErr: any) {
+        console.warn('[Admin] Editor Firestore set bypassed on server:', dbErr.message);
+      }
+
+      res.status(201).json({
+        success: true,
+        claimAssigned,
+        editor: editorProfile,
+      });
+    } catch (error: any) {
+      console.error('Error creating editor:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/editors/:uid/role
+ * Super Admin: Assign or change a user's role ('editor' | 'agent' | 'user').
+ * Never allows promoting self/other accounts to 'superadmin'.
+ */
+app.patch(
+  '/api/admin/editors/:uid/role',
+  authenticateToken,
+  requireSuperAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { uid } = req.params;
+      const { role } = req.body;
+
+      if (!['editor', 'agent', 'user'].includes(role)) {
+        res.status(400).json({ error: 'Role must be editor, agent, or user' });
+        return;
+      }
+
+      if (fallbackUsers.has(uid)) {
+        const existing = fallbackUsers.get(uid)!;
+        fallbackUsers.set(uid, { ...existing, role, updatedAt: new Date().toISOString() });
+      }
+
+      let claimAssigned = false;
+      try {
+        await adminAuth.setCustomUserClaims(uid, { role });
+        claimAssigned = true;
+      } catch (claimErr: any) {
+        console.warn('[Admin] Custom claim update bypassed:', claimErr.message);
+      }
+
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            role,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (dbErr: any) {
+        console.warn('[Admin] Firestore role update bypassed:', dbErr.message);
+      }
+
+      res.json({ success: true, uid, role, claimAssigned });
+    } catch (error: any) {
+      console.error('Error updating role:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/editors/:uid/status
+ * Super Admin: Enable or disable an Editor account.
+ */
+app.patch(
+  '/api/admin/editors/:uid/status',
+  authenticateToken,
+  requireSuperAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { uid } = req.params;
+      const { status } = req.body;
+
+      if (!['active', 'disabled'].includes(status)) {
+        res.status(400).json({ error: 'Status must be active or disabled' });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      if (fallbackUsers.has(uid)) {
+        const existing = fallbackUsers.get(uid)!;
+        fallbackUsers.set(uid, { ...existing, status, updatedAt: now });
+      }
+
+      try {
+        await adminAuth.updateUser(uid, { disabled: status === 'disabled' });
+      } catch (authErr: any) {
+        console.warn('[Admin] Firebase Auth editor status update bypassed:', authErr.message);
+      }
+
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            status,
+            updatedAt: now,
+            ...(status === 'disabled'
+              ? { disabledAt: now, disabledBy: req.user!.email }
+              : { enabledAt: now, enabledBy: req.user!.email }),
+          },
+          { merge: true }
+        );
+      } catch (dbErr: any) {
+        console.warn('[Admin] Firestore editor status update bypassed:', dbErr.message);
+      }
+
+      res.json({ success: true, uid, status });
+    } catch (error: any) {
+      console.error('Error updating editor status:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /api/admin/editors/:uid/reset-password
+ * Super Admin: Initiate or generate a Firebase Auth password reset link for an Editor.
+ */
+app.post(
+  '/api/admin/editors/:uid/reset-password',
+  authenticateToken,
+  requireSuperAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { uid } = req.params;
+      const { email } = req.body;
+      let targetEmail = email ? String(email).trim() : '';
+
+      if (!targetEmail && fallbackUsers.has(uid)) {
+        targetEmail = fallbackUsers.get(uid)!.email;
+      }
+
+      if (!targetEmail) {
+        try {
+          const snap = await adminDb.collection('users').doc(uid).get();
+          if (snap.exists) targetEmail = snap.data()?.email || '';
+        } catch {}
+      }
+
+      if (!targetEmail) {
+        res.status(400).json({ error: 'Editor email is required for password reset.' });
+        return;
+      }
+
+      let resetLink: string | undefined;
+      try {
+        resetLink = await adminAuth.generatePasswordResetLink(targetEmail);
+      } catch (linkErr: any) {
+        console.warn('[Admin] generatePasswordResetLink bypassed:', linkErr.message);
+      }
+
+      const now = new Date().toISOString();
+      if (fallbackUsers.has(uid)) {
+        const existing = fallbackUsers.get(uid)!;
+        fallbackUsers.set(uid, {
+          ...existing,
+          passwordResetRequestedAt: now,
+          passwordResetRequestedBy: req.user!.email,
+          updatedAt: now,
+        });
+      }
+
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            passwordResetRequestedAt: now,
+            passwordResetRequestedBy: req.user!.email,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      } catch {}
+
+      res.json({
+        success: true,
+        uid,
+        email: targetEmail,
+        resetLink: resetLink || null,
+        message: resetLink
+          ? 'Firebase Auth password reset link generated.'
+          : 'Password reset initiation logged (Firebase Client reset email triggered).',
+      });
+    } catch (error: any) {
+      console.error('Error resetting editor password:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * DELETE /api/admin/editors/:uid
+ * Super Admin: Revoke Editor role access and remove account cleanly without touching authored content.
+ */
+app.delete(
+  '/api/admin/editors/:uid',
+  authenticateToken,
+  requireSuperAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { uid } = req.params;
+      const now = new Date().toISOString();
+
+      if (fallbackUsers.has(uid)) {
+        const existing = fallbackUsers.get(uid)!;
+        fallbackUsers.set(uid, {
+          ...existing,
+          role: 'user',
+          status: 'deleted',
+          updatedAt: now,
+        });
+      }
+
+      try {
+        await adminAuth.setCustomUserClaims(uid, { role: 'user' });
+        await adminAuth.updateUser(uid, { disabled: true });
+      } catch (authErr: any) {
+        console.warn('[Admin] Revoke editor auth bypassed on server:', authErr.message);
+      }
+
+      try {
+        await adminDb.collection('users').doc(uid).set(
+          {
+            role: 'user',
+            status: 'deleted',
+            deletedAt: now,
+            deletedBy: req.user!.email,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      } catch (dbErr: any) {
+        console.warn('[Admin] Firestore editor remove bypassed:', dbErr.message);
+      }
+
+      res.json({
+        success: true,
+        message: 'Editor access revoked cleanly. Editorial content history remains preserved.',
+      });
+    } catch (error: any) {
+      console.error('Error removing editor access:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * POST /api/editor/audit-logs
+ * Editor / Super Admin: Append an immutable content audit trail entry.
+ */
+app.post(
+  '/api/editor/audit-logs',
+  authenticateToken,
+  requireEditorOrAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const payload = req.body || {};
+      const logId =
+        payload.logId && /^[a-zA-Z0-9_-]+$/.test(payload.logId)
+          ? payload.logId
+          : `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      const entry = {
+        logId,
+        editorId: req.user!.uid,
+        editorEmail: req.user!.email || payload.editorEmail || '',
+        editorName: payload.editorName || req.user!.name || req.user!.email || 'Editor',
+        editorRole: req.isSuperAdmin ? 'superadmin' : 'editor',
+        contentType: payload.contentType || 'property',
+        contentId: String(payload.contentId || ''),
+        contentTitle: String(payload.contentTitle || ''),
+        action: payload.action || 'update',
+        changedFields: Array.isArray(payload.changedFields) ? payload.changedFields : [],
+        summary: String(payload.summary || ''),
+        timestamp: payload.timestamp || new Date().toISOString(),
+      };
+
+      fallbackAuditLogs.unshift(entry);
+      if (fallbackAuditLogs.length > 500) fallbackAuditLogs.pop();
+
+      try {
+        await adminDb.collection('audit_logs').doc(logId).set(entry);
+      } catch (dbErr: any) {
+        console.warn('[Audit] Firestore write bypassed on server:', dbErr.message);
+      }
+
+      res.status(201).json({ success: true, log: entry });
+    } catch (error: any) {
+      console.error('Error creating audit log:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+/**
+ * GET /api/admin/audit-logs
+ * Super Admin: View immutable content change audit logs.
+ */
+app.get(
+  '/api/admin/audit-logs',
+  authenticateToken,
+  requireSuperAdmin,
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      let logs: any[] = [];
+      try {
+        const snap = await adminDb
+          .collection('audit_logs')
+          .orderBy('timestamp', 'desc')
+          .limit(200)
+          .get();
+        logs = snap.docs.map((d) => d.data());
+      } catch (dbErr: any) {
+        console.warn('[Audit] Firestore list bypassed due to IAM:', dbErr.message);
+      }
+
+      if (logs.length === 0) {
+        logs = [...fallbackAuditLogs];
+      }
+
+      res.json({ logs });
+    } catch (error: any) {
+      console.error('Error fetching audit logs:', error);
+      res.json({ logs: [...fallbackAuditLogs] });
     }
   }
 );

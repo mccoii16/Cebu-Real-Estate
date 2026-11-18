@@ -3,11 +3,15 @@ import { BuildingDoc, PropertyDoc } from '../types/property';
 export const INITIAL_BUILDINGS: BuildingDoc[] = [
   {
     buildingId: 'bld-the-alcoves',
+    slug: 'the-alcoves',
     buildingName: 'The Alcoves',
     location: 'Cebu Business Park',
     address: 'Luzon Avenue, Cebu Business Park, Cebu City, 6000',
     description:
       'A luxury 39-storey residential condominium directly integrated with Ayala Center Cebu, featuring upscale fitness centers, sky lounges, and lap pools.',
+    developer: 'Ayala Land Premier',
+    buildingType: 'Luxury Residential Condominium',
+    totalFloors: 39,
     buildingImages: ['/assets/extracted/the_alcoves.png', '/assets/extracted/photo_the_alcoves.png'],
     amenities: [
       'Direct Ayala Mall Access',
@@ -20,11 +24,15 @@ export const INITIAL_BUILDINGS: BuildingDoc[] = [
   },
   {
     buildingId: 'bld-38-park-avenue',
+    slug: '38-park-avenue',
     buildingName: '38 Park Avenue',
     location: 'Cebu IT Park',
     address: 'Salinas Drive, Cebu IT Park, Apas, Cebu City, 6000',
     description:
       'New York-inspired skyscraper living soaring 38 levels in the heart of Cebu IT Park, with multi-level sky gardens and promenade gardens.',
+    developer: 'El Camino Developers Cebu',
+    buildingType: 'High-Rise Residential Condominium',
+    totalFloors: 38,
     buildingImages: ['/assets/extracted/park_avenue.png', '/assets/extracted/photo_park_avenue.png'],
     amenities: [
       'Grand Atrium Lobby',
@@ -37,11 +45,14 @@ export const INITIAL_BUILDINGS: BuildingDoc[] = [
   },
   {
     buildingId: 'bld-mactan-newtown',
+    slug: 'mactan-newtown-residences',
     buildingName: 'Mactan Newtown Residences',
     location: 'Mactan Newtown',
     address: 'Newtown Boulevard, Lapu-Lapu City, 6015',
     description:
       'Master-planned coastal resort township residences with panoramic views of Magellan Bay and private beach club privileges.',
+    developer: 'Megaworld Corporation',
+    buildingType: 'Coastal Township Condominium',
     buildingImages: ['/assets/extracted/mactan_residences.png', '/assets/extracted/photo_mactan_residences.png'],
     amenities: [
       'Beach Club Access',
@@ -54,11 +65,14 @@ export const INITIAL_BUILDINGS: BuildingDoc[] = [
   },
   {
     buildingId: 'bld-astra-centre',
+    slug: 'astra-centre',
     buildingName: 'Astra Centre',
     location: 'Cebu Business Park',
     address: 'A.S. Fortuna Street, Metro Cebu Corridor',
     description:
       'Mixed-use lifestyle destination integrating Astra Lifestyle Mall, Radisson RED Hotel, and One Astra Place residential condominium.',
+    developer: 'Cebu Landmasters',
+    buildingType: 'Mixed-Use Lifestyle Development',
     buildingImages: ['/assets/extracted/astra_centre.png', '/assets/extracted/photo_astra_centre.png'],
     amenities: [
       'Integrated Radisson RED Hotel & Mall',
@@ -74,6 +88,7 @@ export const INITIAL_BUILDINGS: BuildingDoc[] = [
 export const INITIAL_PROPERTIES: PropertyDoc[] = [
   {
     propertyId: 'prop-alcoves-18b',
+    slug: 'the-alcoves-cebu-business-park',
     buildingId: 'bld-the-alcoves',
     buildingName: 'The Alcoves',
     propertyTitle: 'The Alcoves',
@@ -85,6 +100,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 1,
     bathrooms: 1,
     floorArea: 36,
+    availabilityLabel: 'Available',
     description:
       'The Alcoves is an elite residential condominium standing at 39 storeys, seamlessly integrated with Ayala Center Cebu. Designed with grand living in mind, it features high ceilings, floor-to-ceiling glass, and resort-level wellness amenities in the heart of Cebu’s premier financial hub.',
     amenities: [
@@ -111,6 +127,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
   },
   {
     propertyId: 'prop-38-park-24a',
+    slug: '38-park-avenue-cebu-it-park',
     buildingId: 'bld-38-park-avenue',
     buildingName: '38 Park Avenue',
     propertyTitle: '38 Park Avenue',
@@ -122,6 +139,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 1,
     bathrooms: 1,
     floorArea: 45,
+    availabilityLabel: 'Available',
     description:
       'Inspired by New York urban architecture, 38 Park Avenue rises 38 stories high within the Cebu IT Park. Featuring the iconic sky gardens and the Green Promenade, it delivers master-planned living with contemporary sophistication.',
     amenities: [
@@ -148,6 +166,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
   },
   {
     propertyId: 'prop-mactan-newtown-res',
+    slug: 'mactan-newtown-residences',
     buildingId: 'bld-mactan-newtown',
     buildingName: 'Mactan Newtown Residences',
     propertyTitle: 'Mactan Newtown Residences',
@@ -159,6 +178,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 2,
     bathrooms: 2,
     floorArea: 78,
+    availabilityLabel: 'Available for Lease',
     description:
       'Enjoy coastal resort living coupled with township convenience. Mactan Newtown Residences offers pristine views of the Hilutungan Channel and Magellan Bay, with exclusive access to the Mactan Newtown Beach club.',
     amenities: [
@@ -185,6 +205,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
   },
   {
     propertyId: 'prop-astra-centre-902',
+    slug: 'astra-centre-cebu',
     buildingId: 'bld-astra-centre',
     buildingName: 'Astra Centre',
     propertyTitle: 'Astra Centre',
@@ -196,6 +217,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 2,
     bathrooms: 2,
     floorArea: 67,
+    availabilityLabel: 'Available',
     description:
       'A dynamic mixed-use lifestyle development featuring Astra Lifestyle Mall, Radisson RED Hotel, and One Astra Place residential condominium. Designed for discerning investors seeking high rental yields and cosmopolitan lifestyle.',
     amenities: [
@@ -222,6 +244,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
   },
   {
     propertyId: 'prop-lucima-cbp-12',
+    slug: 'lucima-sustainable-residence',
     buildingId: 'bld-the-alcoves',
     buildingName: 'Lucima Luxury Tower',
     propertyTitle: 'Lucima Sustainable Residence',
@@ -233,6 +256,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 3,
     bathrooms: 3,
     floorArea: 112,
+    availabilityLabel: 'Available',
     description:
       'The first quadruply-certified sustainable luxury residential tower in the Philippines. Exquisite Scandinavian-inspired architectural finishes with energy-efficient smart building tech.',
     amenities: [
@@ -257,7 +281,8 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
   },
   {
     propertyId: 'prop-banilad-villa',
-    buildingId: 'bld-the-alcoves',
+    slug: 'banilad-estate-villa',
+    buildingId: 'bld-banilad-enclave',
     buildingName: 'Maria Luisa Enclave',
     propertyTitle: 'Banilad Estate Villa',
     location: 'Banilad',
@@ -268,6 +293,7 @@ export const INITIAL_PROPERTIES: PropertyDoc[] = [
     bedrooms: 4,
     bathrooms: 4,
     floorArea: 380,
+    availabilityLabel: 'Available',
     description:
       'An architectural masterwork nestled within Cebu’s most prestigious gated enclave. Boasts panoramic mountain vistas, landscaped private courtyards, and bespoke Italian marble finishes.',
     amenities: [

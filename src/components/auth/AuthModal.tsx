@@ -172,7 +172,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
           <div className="relative flex items-center justify-center mb-5">
             <div className="border-t border-white/15 w-full" />
             <span className="bg-[#17243B] px-3 text-[11px] uppercase tracking-wider text-white/50">
-              Or Agent Email Login
+              Or Staff / Agent Email Login
             </span>
           </div>
 

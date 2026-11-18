@@ -40,6 +40,12 @@ import {
   ArrowRight,
   ChevronLeft,
   Send,
+  Archive,
+  RotateCcw,
+  EyeOff,
+  UserCog,
+  History,
+  RefreshCw,
 } from 'lucide-react';
 import {
   PropertyDoc,
@@ -49,15 +55,30 @@ import {
   WebsiteSettings,
   LocationHighlight,
   HeroSlideConfig,
+  ContentPublishStatus,
+  AuditLogDoc,
 } from '../../types/property';
 import { useAuth } from '../../context/AuthContext';
 import { AddPropertyModal } from './AddPropertyModal';
+import { BuildingFormModal } from './BuildingFormModal';
+import { NeighborhoodFormModal } from './NeighborhoodFormModal';
+import { ContentPreviewModal } from './ContentPreviewModal';
+import { ConfirmActionModal } from './ConfirmActionModal';
 import { collection, doc, updateDoc, deleteDoc, setDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { saveWebsiteSettings, DEFAULT_WEBSITE_SETTINGS, getWebsiteSettings } from '../../services/settingsService';
 import { saveLocation, deleteLocation, INITIAL_LOCATIONS } from '../../services/locationService';
-import { uploadSiteAsset } from '../../services/storageService';
+import { uploadSiteAsset, deleteUnreferencedStorageImages } from '../../services/storageService';
 import { createAgentFirebaseAuthUser } from '../../services/agentAuthService';
+import {
+  loadEditorsList,
+  createEditorAccount,
+  assignStaffRole,
+  toggleEditorAccountStatus,
+  resetEditorPassword,
+  removeEditorAccountAccess,
+} from '../../services/editorAdminService';
+import { getAuditLogs, recordAuditLog } from '../../services/auditLogService';
 import {
   subscribeToInquiries,
   updateInquiryStatus as updateInquiryStatusService,
@@ -67,9 +88,16 @@ import {
   DEFAULT_INQUIRY_EMAIL_SUBJECT,
   DEFAULT_INQUIRY_EMAIL_BODY,
   formatInquiryNotificationEmail,
-  isDuplicateBuildingName,
   paginateItems,
 } from '../../utils/filterProperties';
+import { matchesNeighborhoodName } from '../../utils/slugs';
+import {
+  checkBuildingDeleteSafety,
+  checkNeighborhoodDeleteSafety,
+  collectAllReferencedImageUrls,
+  getEffectivePublishStatus,
+} from '../../utils/contentManagement';
+import { inferAuditAction } from '../../utils/editorPermissions';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -84,6 +112,7 @@ interface SuperAdminDashboardProps {
   onSettingsUpdated?: (settings: WebsiteSettings) => void;
   onViewPublicSite: () => void;
   onSelectPropertyPreview: (property: PropertyDoc) => void;
+  onOpenPublicPath?: (path: string) => void;
 }
 
 export type AdminSection =
@@ -93,7 +122,9 @@ export type AdminSection =
   | 'buildings'
   | 'locations'
   | 'agents'
+  | 'editors'
   | 'inquiries'
+  | 'audit'
   | 'settings';
 
 export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
@@ -109,21 +140,43 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   onSettingsUpdated,
   onViewPublicSite,
   onSelectPropertyPreview,
+  onOpenPublicPath,
 }) => {
   const { user, profile, signOut } = useAuth();
   const [activeSection, setActiveSection] = useState<AdminSection>('overview');
 
-  // Locations Management State
+  // Inline Banner & Shared Preview / Confirm Modals
+  const [actionNotice, setActionNotice] = useState<{
+    type: 'error' | 'success';
+    text: string;
+  } | null>(null);
+  const [contentPreview, setContentPreview] = useState<
+    | { type: 'property'; item: PropertyDoc }
+    | { type: 'building'; item: BuildingDoc }
+    | { type: 'neighborhood'; item: LocationHighlight }
+    | null
+  >(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDestructive?: boolean;
+    blockedReason?: string | null;
+    secondaryLabel?: string;
+    onSecondaryAction?: () => void;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
+  const [isConfirmBusy, setIsConfirmBusy] = useState(false);
+
+  // Neighborhood & Areas Management State
   const [locationsList, setLocationsList] = useState<LocationHighlight[]>(
     locations && locations.length > 0 ? locations : INITIAL_LOCATIONS
   );
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<LocationHighlight | null>(null);
-  const [locName, setLocName] = useState('');
-  const [locTagline, setLocTagline] = useState('');
-  const [locDescription, setLocDescription] = useState('');
-  const [locImage, setLocImage] = useState('');
-  const [isSavingLoc, setIsSavingLoc] = useState(false);
+  const [locationStatusFilter, setLocationStatusFilter] = useState<
+    'all' | 'published' | 'unpublished' | 'archived'
+  >('all');
 
   useEffect(() => {
     if (locations && locations.length > 0) {
@@ -139,11 +192,46 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentEmail, setNewAgentEmail] = useState('');
   const [newAgentPassword, setNewAgentPassword] = useState('');
-  const [createdAgentInfo, setCreatedAgentInfo] = useState<{ email: string; pass: string; warning?: string } | null>(null);
+  const [createdAgentInfo, setCreatedAgentInfo] = useState<{
+    email: string;
+    pass: string;
+    warning?: string;
+  } | null>(null);
+
+  // Editor Role Management State (Super Admin-only)
+  const [editors, setEditors] = useState<UserProfile[]>([]);
+  const [isLoadingEditors, setIsLoadingEditors] = useState(false);
+  const [editorSearch, setEditorSearch] = useState('');
+  const [isCreateEditorOpen, setIsCreateEditorOpen] = useState(false);
+  const [newEditorName, setNewEditorName] = useState('');
+  const [newEditorEmail, setNewEditorEmail] = useState('');
+  const [newEditorPassword, setNewEditorPassword] = useState('');
+  const [isCreatingEditor, setIsCreatingEditor] = useState(false);
+  const [createdEditorInfo, setCreatedEditorInfo] = useState<{
+    email: string;
+    pass: string;
+    warning?: string;
+  } | null>(null);
+  const [resetLinkModal, setResetLinkModal] = useState<{
+    email: string;
+    resetEmailSent: boolean;
+    resetLink?: string | null;
+    note?: string;
+  } | null>(null);
+
+  // Editorial Audit Logs State (Super Admin-only)
+  const [auditLogs, setAuditLogs] = useState<AuditLogDoc[]>([]);
+  const [isLoadingAuditLogs, setIsLoadingAuditLogs] = useState(false);
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditTypeFilter, setAuditTypeFilter] = useState<
+    'all' | 'property' | 'building' | 'neighborhood'
+  >('all');
 
   // Property Filters & Actions
   const [propertySearch, setPropertySearch] = useState('');
-  const [propertyStatusFilter, setPropertyStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected' | 'draft'>('all');
+  const [propertyStatusFilter, setPropertyStatusFilter] = useState<
+    'all' | 'approved' | 'pending' | 'rejected' | 'draft' | 'archived'
+  >('all');
   const [adminPropsPage, setAdminPropsPage] = useState(1);
   const [editingProperty, setEditingProperty] = useState<PropertyDoc | null>(null);
   const [isAddPropertyOpen, setIsAddPropertyOpen] = useState(false);
@@ -157,13 +245,9 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   // Building State
   const [isAddBuildingOpen, setIsAddBuildingOpen] = useState(false);
   const [editingBuilding, setEditingBuilding] = useState<BuildingDoc | null>(null);
-  const [newBuildingName, setNewBuildingName] = useState('');
-  const [newBuildingLocation, setNewBuildingLocation] = useState('Cebu Business Park');
-  const [newBuildingAddress, setNewBuildingAddress] = useState('');
-  const [newBuildingDescription, setNewBuildingDescription] = useState('');
-  const [newBuildingImage, setNewBuildingImage] = useState('/assets/extracted/the_alcoves.png');
-  const [isUploadingBuildingImg, setIsUploadingBuildingImg] = useState(false);
-  const [buildingError, setBuildingError] = useState<string | null>(null);
+  const [buildingStatusFilter, setBuildingStatusFilter] = useState<
+    'all' | 'published' | 'unpublished' | 'archived'
+  >('all');
   const [viewingBuildingProperties, setViewingBuildingProperties] = useState<BuildingDoc | null>(null);
 
   // Inquiries State
@@ -229,9 +313,37 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     }
   };
 
+  // Fetch editors list
+  const loadEditors = async () => {
+    setIsLoadingEditors(true);
+    try {
+      const list = await loadEditorsList(user);
+      setEditors(list);
+    } catch (err) {
+      console.error('Error loading editors:', err);
+    } finally {
+      setIsLoadingEditors(false);
+    }
+  };
+
+  // Fetch audit logs
+  const loadAuditLogs = async () => {
+    setIsLoadingAuditLogs(true);
+    try {
+      const logs = await getAuditLogs(user);
+      setAuditLogs(logs);
+    } catch (err) {
+      console.error('Error loading audit logs:', err);
+    } finally {
+      setIsLoadingAuditLogs(false);
+    }
+  };
+
   // Real-time synchronization of customer inquiries (dispatched directly to Martiligando@gmail.com)
   useEffect(() => {
     loadAgents();
+    loadEditors();
+    loadAuditLogs();
     loadSettings();
 
     // Subscribe to live Firestore inquiries with automatic offline local buffer
@@ -265,91 +377,238 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     newStatus: 'new' | 'contacted' | 'closed'
   ) => {
     setInquiryStatusUpdating(inquiryId);
+    setActionNotice(null);
     try {
       await updateInquiryStatusService(inquiryId, newStatus);
       setInquiries((prev) =>
         prev.map((inq) => (inq.inquiryId === inquiryId ? { ...inq, status: newStatus } : inq))
       );
     } catch (err: any) {
-      alert(`Error updating inquiry status: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Error updating inquiry status: ${err.message}` });
     } finally {
       setInquiryStatusUpdating(null);
     }
   };
 
   // Delete Inquiry
-  const handleDeleteInquiry = async (inquiryId: string) => {
-    if (!window.confirm('Are you sure you want to remove this client inquiry record?')) return;
-    try {
-      await deleteInquiryService(inquiryId);
-      setInquiries((prev) => prev.filter((inq) => inq.inquiryId !== inquiryId));
-    } catch (err: any) {
-      alert(`Could not delete inquiry: ${err.message}`);
-    }
+  const handleDeleteInquiry = (inquiryId: string) => {
+    setConfirmState({
+      title: 'Delete Inquiry Record',
+      message: 'Are you sure you want to permanently remove this client inquiry record?',
+      confirmLabel: 'Delete Inquiry',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteInquiryService(inquiryId);
+          setInquiries((prev) => prev.filter((inq) => inq.inquiryId !== inquiryId));
+          setActionNotice({ type: 'success', text: 'Client inquiry record removed.' });
+        } catch (err: any) {
+          setActionNotice({ type: 'error', text: `Could not delete inquiry: ${err.message}` });
+        }
+      },
+    });
   };
 
-  // Location Handlers
+  const getOtherReferencedUrls = (exclude?: {
+    propertyId?: string;
+    buildingId?: string;
+    locationId?: string;
+  }) =>
+    collectAllReferencedImageUrls({
+      properties: properties.filter((p) => p.propertyId !== exclude?.propertyId),
+      buildings: buildings.filter((b) => b.buildingId !== exclude?.buildingId),
+      locations: locationsList.filter((l) => l.id !== exclude?.locationId),
+      siteSettings,
+    });
+
+  // Neighborhood & Area Handlers
   const openAddLocationModal = () => {
     setEditingLocation(null);
-    setLocName('');
-    setLocTagline('');
-    setLocDescription('');
-    setLocImage('/assets/extracted/photo_the_alcoves.png');
     setIsLocationModalOpen(true);
   };
 
   const openEditLocationModal = (loc: LocationHighlight) => {
     setEditingLocation(loc);
-    setLocName(loc.name);
-    setLocTagline(loc.tagline);
-    setLocDescription(loc.description);
-    setLocImage(loc.image);
     setIsLocationModalOpen(true);
   };
 
-  const handleSaveLocation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!locName.trim()) {
-      alert('District name is required');
-      return;
-    }
-    setIsSavingLoc(true);
+  const handleSavedLocation = (savedLoc: LocationHighlight) => {
+    const exists = locationsList.some((l) => l.id === savedLoc.id);
+    const updatedList = exists
+      ? locationsList.map((item) => (item.id === savedLoc.id ? savedLoc : item))
+      : [...locationsList, savedLoc];
+    setLocationsList(updatedList);
+    if (onLocationsUpdated) onLocationsUpdated(updatedList);
+    setActionNotice({
+      type: 'success',
+      text: `Neighborhood "${savedLoc.name}" saved (${getEffectivePublishStatus(savedLoc)}).`,
+    });
+  };
+
+  const handleChangeLocationStatus = async (
+    loc: LocationHighlight,
+    targetStatus: ContentPublishStatus
+  ) => {
+    setActionNotice(null);
     try {
-      const id = editingLocation ? editingLocation.id : `loc-${Date.now()}`;
-      const locData: LocationHighlight = {
-        id,
-        name: locName.trim(),
-        tagline: locTagline.trim() || 'Premier Real Estate Zone',
-        description: locDescription.trim() || 'Desirable neighborhood with top residential developments.',
-        image: locImage.trim() || '/assets/extracted/photo_the_alcoves.png',
-        propertyCount: properties.filter((p) => p.location.toLowerCase() === locName.trim().toLowerCase()).length,
+      const now = new Date().toISOString();
+      const prior = getEffectivePublishStatus(loc);
+      const updatedLoc: LocationHighlight = {
+        ...loc,
+        status: targetStatus,
+        previousStatus:
+          targetStatus === 'archived'
+            ? prior !== 'archived'
+              ? prior
+              : loc.previousStatus || 'unpublished'
+            : null,
+        archivedAt: targetStatus === 'archived' ? loc.archivedAt || now : null,
+        updatedAt: now,
       };
-
-      await saveLocation(locData);
-      const updatedList = editingLocation
-        ? locationsList.map((item) => (item.id === id ? locData : item))
-        : [...locationsList, locData];
-
+      await saveLocation(updatedLoc);
+      await recordAuditLog({
+        user,
+        editorEmail: user?.email || undefined,
+        editorName: profile?.displayName || undefined,
+        editorRole: 'superadmin',
+        contentType: 'neighborhood',
+        contentId: loc.id,
+        contentTitle: loc.name,
+        action: inferAuditAction(false, prior, targetStatus),
+        changedFields: ['status'],
+      });
+      loadAuditLogs();
+      const updatedList = locationsList.map((item) =>
+        item.id === loc.id ? updatedLoc : item
+      );
       setLocationsList(updatedList);
       if (onLocationsUpdated) onLocationsUpdated(updatedList);
-      setIsLocationModalOpen(false);
+      setActionNotice({
+        type: 'success',
+        text: `Neighborhood "${loc.name}" marked as ${targetStatus}.`,
+      });
     } catch (err: any) {
-      alert(`Failed to save location: ${err.message}`);
-    } finally {
-      setIsSavingLoc(false);
+      setActionNotice({ type: 'error', text: `Failed to update neighborhood: ${err.message}` });
     }
   };
 
-  const handleDeleteLocation = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete district "${name}"?`)) return;
-    try {
-      await deleteLocation(id);
-      const updated = locationsList.filter((l) => l.id !== id);
-      setLocationsList(updated);
-      if (onLocationsUpdated) onLocationsUpdated(updated);
-    } catch (err: any) {
-      alert(`Failed to delete location: ${err.message}`);
+  const requestDeleteLocation = (loc: LocationHighlight) => {
+    const safety = checkNeighborhoodDeleteSafety(loc, buildings, properties);
+    if (!safety.canDelete) {
+      setConfirmState({
+        title: `Cannot Delete "${loc.name}"`,
+        message: '',
+        blockedReason: safety.reason,
+        secondaryLabel: 'Archive Instead',
+        onSecondaryAction: () => {
+          setConfirmState(null);
+          handleChangeLocationStatus(loc, 'archived');
+        },
+        onConfirm: () => {},
+      });
+      return;
     }
+
+    setConfirmState({
+      title: 'Permanently Delete Neighborhood',
+      message: `No properties or buildings currently reference "${loc.name}". Permanently delete this neighborhood and any unshared Storage photos?`,
+      confirmLabel: 'Delete Permanently',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteLocation(loc.id);
+          const otherRefs = getOtherReferencedUrls({ locationId: loc.id });
+          const removedImgs = [loc.image, ...(loc.galleryImages || [])].filter(Boolean);
+          await deleteUnreferencedStorageImages(removedImgs, otherRefs);
+          const updated = locationsList.filter((l) => l.id !== loc.id);
+          setLocationsList(updated);
+          if (onLocationsUpdated) onLocationsUpdated(updated);
+          setActionNotice({ type: 'success', text: `Deleted neighborhood "${loc.name}".` });
+        } catch (err: any) {
+          setActionNotice({ type: 'error', text: `Failed to delete neighborhood: ${err.message}` });
+        }
+      },
+    });
+  };
+
+  // Building Quick Status & Safe Delete Handlers
+  const handleChangeBuildingStatus = async (
+    bld: BuildingDoc,
+    targetStatus: ContentPublishStatus
+  ) => {
+    setActionNotice(null);
+    try {
+      const now = new Date().toISOString();
+      const prior = getEffectivePublishStatus(bld);
+      const updatedDoc: BuildingDoc = {
+        ...bld,
+        status: targetStatus,
+        previousStatus:
+          targetStatus === 'archived'
+            ? prior !== 'archived'
+              ? prior
+              : bld.previousStatus || 'unpublished'
+            : null,
+        archivedAt: targetStatus === 'archived' ? bld.archivedAt || now : null,
+        updatedAt: now,
+      };
+      await updateDoc(doc(db, 'buildings', bld.buildingId), updatedDoc as any);
+      await recordAuditLog({
+        user,
+        editorEmail: user?.email || undefined,
+        editorName: profile?.displayName || undefined,
+        editorRole: 'superadmin',
+        contentType: 'building',
+        contentId: bld.buildingId,
+        contentTitle: bld.buildingName,
+        action: inferAuditAction(false, prior, targetStatus),
+        changedFields: ['status'],
+      });
+      loadAuditLogs();
+      onBuildingAdded(updatedDoc);
+      setActionNotice({
+        type: 'success',
+        text: `Building "${bld.buildingName}" updated to ${targetStatus}.`,
+      });
+    } catch (err: any) {
+      setActionNotice({ type: 'error', text: `Could not update building: ${err.message}` });
+    }
+  };
+
+  const requestDeleteBuilding = (bld: BuildingDoc) => {
+    const safety = checkBuildingDeleteSafety(bld, properties);
+    if (!safety.canDelete) {
+      setConfirmState({
+        title: `Cannot Delete "${bld.buildingName}"`,
+        message: '',
+        blockedReason: safety.reason,
+        secondaryLabel: 'Archive Building Instead',
+        onSecondaryAction: () => {
+          setConfirmState(null);
+          handleChangeBuildingStatus(bld, 'archived');
+        },
+        onConfirm: () => {},
+      });
+      return;
+    }
+
+    setConfirmState({
+      title: 'Permanently Delete Building',
+      message: `No property listings reference "${bld.buildingName}". Permanently delete this building record and any unshared Storage photos?`,
+      confirmLabel: 'Delete Permanently',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'buildings', bld.buildingId));
+          const otherRefs = getOtherReferencedUrls({ buildingId: bld.buildingId });
+          await deleteUnreferencedStorageImages(bld.buildingImages || [], otherRefs);
+          onBuildingDeleted(bld.buildingId);
+          setActionNotice({ type: 'success', text: `Deleted building "${bld.buildingName}".` });
+        } catch (err: any) {
+          setActionNotice({ type: 'error', text: `Could not delete building: ${err.message}` });
+        }
+      },
+    });
   };
 
   // Save Website Settings
@@ -357,6 +616,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     e.preventDefault();
     setIsSavingSettings(true);
     setSettingsSaveSuccess(false);
+    setActionNotice(null);
     try {
       const adminEmail = user?.email || 'Martiligando@gmail.com';
       const updated = await saveWebsiteSettings(siteSettings, adminEmail);
@@ -365,7 +625,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       setSettingsSaveSuccess(true);
       setTimeout(() => setSettingsSaveSuccess(false), 4000);
     } catch (err: any) {
-      alert(`Failed to save settings: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Failed to save settings: ${err.message}` });
     } finally {
       setIsSavingSettings(false);
     }
@@ -379,6 +639,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   // Approve action
   const handleApprove = async (property: PropertyDoc) => {
     setActionError(null);
+    setActionNotice(null);
     try {
       const now = new Date().toISOString();
       const approverId = user?.email || 'admin-super';
@@ -413,7 +674,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       setReviewingProperty(null);
     } catch (err: any) {
       console.error('Approval failed:', err);
-      setActionError(`Approval failed: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Approval failed: ${err.message}` });
     }
   };
 
@@ -421,6 +682,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const openRejectDialog = (property: PropertyDoc) => {
     setReviewingProperty(property);
     setRejectionReason('');
+    setActionError(null);
     setRejectionModalOpen(true);
   };
 
@@ -428,7 +690,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const handleConfirmReject = async () => {
     if (!reviewingProperty) return;
     if (!rejectionReason.trim()) {
-      alert('Please enter a constructive rejection reason for the Agent.');
+      setActionError('Please enter a constructive rejection reason for the Agent.');
       return;
     }
 
@@ -439,14 +701,12 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       let updatePayload: any;
 
       if (reviewingProperty.status === 'approved' && reviewingProperty.hasPendingReview) {
-        // Revision was rejected: keep live listing approved, record rejection on revision
         updatePayload = {
           hasPendingReview: false,
           rejectionReason: `Revision rejected: ${rejectionReason.trim()}`,
           updatedAt: now,
         };
       } else {
-        // Initial submission rejected
         updatePayload = {
           status: 'rejected',
           rejectionReason: rejectionReason.trim(),
@@ -467,13 +727,14 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       setReviewingProperty(null);
     } catch (err: any) {
       console.error('Rejection failed:', err);
-      alert(`Rejection failed: ${err.message}`);
+      setActionError(`Rejection failed: ${err.message}`);
     }
   };
 
   // Toggle Featured Status
   const handleToggleFeatured = async (property: PropertyDoc, e: React.MouseEvent) => {
     e.stopPropagation();
+    setActionNotice(null);
     try {
       const newFeatured = !property.featured;
       await updateDoc(doc(db, 'properties', property.propertyId), {
@@ -482,7 +743,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       });
       onPropertyUpdated({ ...property, featured: newFeatured });
     } catch (err: any) {
-      alert(`Could not toggle featured: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Could not toggle featured: ${err.message}` });
     }
   };
 
@@ -491,11 +752,19 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     property: PropertyDoc,
     newStatus: PropertyDoc['status']
   ) => {
+    setActionNotice(null);
     try {
       const now = new Date().toISOString();
       const payload: Partial<PropertyDoc> = {
         status: newStatus,
         updatedAt: now,
+        previousStatus:
+          newStatus === 'archived'
+            ? property.status !== 'archived'
+              ? property.status
+              : property.previousStatus || 'draft'
+            : null,
+        archivedAt: newStatus === 'archived' ? property.archivedAt || now : null,
         ...(newStatus === 'approved'
           ? {
               approvedAt: property.approvedAt || now,
@@ -506,22 +775,59 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           : {}),
       };
       await updateDoc(doc(db, 'properties', property.propertyId), payload as any);
+      await recordAuditLog({
+        user,
+        editorEmail: user?.email || undefined,
+        editorName: profile?.displayName || undefined,
+        editorRole: 'superadmin',
+        contentType: 'property',
+        contentId: property.propertyId,
+        contentTitle: property.propertyTitle,
+        action: inferAuditAction(false, property.status, newStatus),
+        changedFields: ['status'],
+      });
+      loadAuditLogs();
       onPropertyUpdated({ ...property, ...payload });
     } catch (err: any) {
-      alert(`Could not update property status: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Could not update property status: ${err.message}` });
     }
   };
 
-  // Delete Property
-  const handleDeleteProperty = async (propertyId: string, e: React.MouseEvent) => {
+  // Archive / Delete Property
+  const handleDeleteProperty = (property: PropertyDoc, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Are you sure you want to permanently delete this property?')) return;
-    try {
-      await deleteDoc(doc(db, 'properties', propertyId));
-      onPropertyDeleted(propertyId);
-    } catch (err: any) {
-      alert(`Could not delete property: ${err.message}`);
-    }
+    const isAlreadyArchived = property.status === 'archived';
+    setConfirmState({
+      title: isAlreadyArchived ? 'Permanently Delete Property' : 'Delete or Archive Property',
+      message: isAlreadyArchived
+        ? `Permanently delete archived property "${property.propertyTitle}"? Any unshared photos will also be removed from Storage.`
+        : `Permanently deleting "${property.propertyTitle}" cannot be undone. You can also archive it to preserve history safely.`,
+      confirmLabel: 'Delete Permanently',
+      isDestructive: true,
+      ...(!isAlreadyArchived
+        ? {
+            secondaryLabel: 'Archive Instead',
+            onSecondaryAction: () => {
+              setConfirmState(null);
+              handleChangePropertyStatus(property, 'archived');
+            },
+          }
+        : {}),
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'properties', property.propertyId));
+          const otherRefs = getOtherReferencedUrls({ propertyId: property.propertyId });
+          await deleteUnreferencedStorageImages(property.images || [], otherRefs);
+          onPropertyDeleted(property.propertyId);
+          setActionNotice({
+            type: 'success',
+            text: `Deleted property "${property.propertyTitle}".`,
+          });
+        } catch (err: any) {
+          setActionNotice({ type: 'error', text: `Could not delete property: ${err.message}` });
+        }
+      },
+    });
   };
 
   // Create Agent Account
@@ -544,19 +850,18 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       let agentUid = `agent-${Date.now()}`;
       let warningNotice: string | undefined;
 
-      // 1. Register the user in Firebase Authentication using secondary app
       const authResult = await createAgentFirebaseAuthUser(email, temporaryPass, displayName);
       if (authResult.success && authResult.uid) {
         agentUid = authResult.uid;
       } else if (!authResult.success) {
         if (authResult.error === 'auth/operation-not-allowed') {
-          warningNotice = 'Email/Password sign-in provider is disabled in Firebase project cebu-real-estate-84294. Please enable Email/Password in Firebase Console (Authentication > Sign-in method) so this agent can log in with their password.';
+          warningNotice =
+            'Email/Password sign-in provider is disabled in Firebase project cebu-real-estate-84294. Please enable Email/Password in Firebase Console (Authentication > Sign-in method) so this agent can log in with their password.';
         } else {
           warningNotice = `Firebase Auth notice: ${authResult.error}. Note that the agent can also sign in with Google using this email address.`;
         }
       }
 
-      // 2. Direct Firestore profile persistence
       const agentProfile: UserProfile = {
         uid: agentUid,
         email,
@@ -576,7 +881,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         console.warn('[CreateAgent] Firestore setDoc note:', dbErr.message);
       }
 
-      // 3. Optional backend synchronization
       try {
         const token = await user?.getIdToken();
         if (token) {
@@ -613,6 +917,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
   // Provision / Setup Auth Password for existing Agent
   const handleProvisionAgentAuth = async (agent: UserProfile) => {
+    setActionNotice(null);
     const defaultPass = `CebuAgent@${Math.floor(100000 + Math.random() * 900000)}`;
     const pass = agent.temporaryPassword || defaultPass;
     const res = await createAgentFirebaseAuthUser(agent.email, pass, agent.displayName);
@@ -627,19 +932,23 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       });
       setIsCreateAgentOpen(true);
     } else if (res.error === 'auth/operation-not-allowed') {
-      alert(
-        'Email/Password sign-in provider is disabled in Firebase project cebu-real-estate-84294. Please enable Email/Password in Firebase Console: https://console.firebase.google.com/project/cebu-real-estate-84294/authentication/providers'
-      );
+      setActionNotice({
+        type: 'error',
+        text: 'Email/Password sign-in provider is disabled in Firebase Console for project cebu-real-estate-84294.',
+      });
     } else {
-      alert(`Could not register in Firebase Auth: ${res.error}`);
+      setActionNotice({
+        type: 'error',
+        text: `Could not register in Firebase Auth: ${res.error}`,
+      });
     }
   };
 
   // Disable / Enable Agent
   const handleToggleAgentStatus = async (agent: UserProfile) => {
     const newStatus = agent.status === 'active' ? 'disabled' : 'active';
+    setActionNotice(null);
     try {
-      // Direct Firestore update
       try {
         await updateDoc(doc(db, 'users', agent.uid), {
           status: newStatus,
@@ -649,7 +958,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         console.warn('Firestore status update note:', dbErr);
       }
 
-      // Backend call if available
       try {
         const token = await user?.getIdToken();
         if (token) {
@@ -668,120 +976,166 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         prev.map((a) => (a.uid === agent.uid ? { ...a, status: newStatus } : a))
       );
     } catch (err: any) {
-      alert(`Failed to update agent status: ${err.message}`);
+      setActionNotice({ type: 'error', text: `Failed to update agent status: ${err.message}` });
     }
   };
 
   // Delete Agent
-  const handleDeleteAgent = async (agent: UserProfile) => {
-    if (
-      !window.confirm(
-        `Are you sure you want to delete ${agent.displayName}? Their authentication account will be removed, but all property listings will be preserved safely in the database.`
-      )
-    )
+  const handleDeleteAgent = (agent: UserProfile) => {
+    setConfirmState({
+      title: `Remove Agent "${agent.displayName}"`,
+      message:
+        'Their account access will be removed, while all existing property listings they submitted will remain safely preserved in Firestore.',
+      confirmLabel: 'Delete Agent',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          try {
+            await deleteDoc(doc(db, 'users', agent.uid));
+          } catch (dbErr) {
+            console.warn('Firestore delete note:', dbErr);
+          }
+
+          try {
+            const token = await user?.getIdToken();
+            if (token) {
+              await fetch(`/api/admin/agents/${agent.uid}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+              });
+            }
+          } catch {}
+
+          setAgents((prev) => prev.filter((a) => a.uid !== agent.uid));
+          setActionNotice({ type: 'success', text: `Removed agent "${agent.displayName}".` });
+        } catch (err: any) {
+          setActionNotice({ type: 'error', text: `Failed to delete agent: ${err.message}` });
+        }
+      },
+    });
+  };
+
+  // Super Admin: Create Editor Account
+  const handleCreateEditor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionError(null);
+    const email = newEditorEmail.trim().toLowerCase();
+    const displayName = newEditorName.trim();
+    if (!email || !displayName) {
+      setActionError('Full name and work email are required.');
       return;
+    }
 
+    setIsCreatingEditor(true);
     try {
-      // Direct Firestore delete
-      try {
-        await deleteDoc(doc(db, 'users', agent.uid));
-      } catch (dbErr) {
-        console.warn('Firestore delete note:', dbErr);
-      }
+      const { profile: editorProfile, warning } = await createEditorAccount(user, {
+        displayName,
+        email,
+        password: newEditorPassword.trim() || undefined,
+      });
 
-      // Backend call if available
-      try {
-        const token = await user?.getIdToken();
-        if (token) {
-          await fetch(`/api/admin/agents/${agent.uid}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${token}` },
+      setCreatedEditorInfo({
+        email: editorProfile.email,
+        pass: editorProfile.temporaryPassword || newEditorPassword.trim() || '(Google Sign-In)',
+        warning,
+      });
+      setNewEditorName('');
+      setNewEditorEmail('');
+      setNewEditorPassword('');
+      setEditors((prev) => [editorProfile, ...prev.filter((ed) => ed.uid !== editorProfile.uid)]);
+      loadEditors();
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to create editor account.');
+    } finally {
+      setIsCreatingEditor(false);
+    }
+  };
+
+  // Super Admin: Assign Role between Editor and Agent
+  const handleAssignRole = async (targetUser: UserProfile, targetRole: 'editor' | 'agent') => {
+    setActionNotice(null);
+    try {
+      const updated = await assignStaffRole(user, targetUser, targetRole);
+      if (targetRole === 'editor') {
+        setAgents((prev) => prev.filter((a) => a.uid !== targetUser.uid));
+        setEditors((prev) => [updated, ...prev.filter((ed) => ed.uid !== targetUser.uid)]);
+      } else {
+        setEditors((prev) => prev.filter((ed) => ed.uid !== targetUser.uid));
+        setAgents((prev) => [updated, ...prev.filter((a) => a.uid !== targetUser.uid)]);
+      }
+      setActionNotice({
+        type: 'success',
+        text: `Updated ${targetUser.displayName}'s role to ${targetRole.toUpperCase()}.`,
+      });
+    } catch (err: any) {
+      setActionNotice({
+        type: 'error',
+        text: `Could not update role: ${err?.message || 'Permission denied'}`,
+      });
+    }
+  };
+
+  // Super Admin: Disable / Enable Editor
+  const handleToggleEditorStatus = async (editor: UserProfile) => {
+    setActionNotice(null);
+    try {
+      const updated = await toggleEditorAccountStatus(user, editor);
+      setEditors((prev) => prev.map((ed) => (ed.uid === editor.uid ? updated : ed)));
+      setActionNotice({
+        type: 'success',
+        text: `Editor "${editor.displayName}" is now ${updated.status}.`,
+      });
+    } catch (err: any) {
+      setActionNotice({
+        type: 'error',
+        text: `Failed to update editor status: ${err?.message || 'Permission denied'}`,
+      });
+    }
+  };
+
+  // Super Admin: Initiate Editor Password Reset
+  const handleResetEditorPassword = async (editor: UserProfile) => {
+    setActionNotice(null);
+    try {
+      const res = await resetEditorPassword(user, editor);
+      setResetLinkModal({
+        email: editor.email,
+        resetEmailSent: res.resetEmailSent,
+        resetLink: res.resetLink,
+        note: res.note,
+      });
+    } catch (err: any) {
+      setActionNotice({
+        type: 'error',
+        text: `Password reset failed: ${err?.message || 'Error'}`,
+      });
+    }
+  };
+
+  // Super Admin: Remove Editor Access (preserves all content)
+  const handleRemoveEditorAccess = (editor: UserProfile) => {
+    setConfirmState({
+      title: `Remove Editor Access for "${editor.displayName}"`,
+      message:
+        'This revokes their Editor login and access immediately. All Properties, Buildings, and Neighborhood guides they created or edited remain safely intact.',
+      confirmLabel: 'Remove Editor Access',
+      isDestructive: true,
+      onConfirm: async () => {
+        try {
+          await removeEditorAccountAccess(user, editor);
+          setEditors((prev) => prev.filter((ed) => ed.uid !== editor.uid));
+          setActionNotice({
+            type: 'success',
+            text: `Removed Editor access for "${editor.displayName}".`,
+          });
+        } catch (err: any) {
+          setActionNotice({
+            type: 'error',
+            text: `Could not remove editor access: ${err?.message || 'Permission denied'}`,
           });
         }
-      } catch {}
-
-      setAgents((prev) => prev.filter((a) => a.uid !== agent.uid));
-    } catch (err: any) {
-      alert(`Failed to delete agent: ${err.message}`);
-    }
-  };
-
-  // Upload Building Image
-  const handleBuildingImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsUploadingBuildingImg(true);
-    setBuildingError(null);
-    try {
-      const res = await uploadSiteAsset(file, 'buildings');
-      setNewBuildingImage(res.url);
-    } catch (err: any) {
-      setBuildingError(`Upload failed: ${err.message || 'Check Storage permissions.'}`);
-    } finally {
-      setIsUploadingBuildingImg(false);
-    }
-  };
-
-  // Add or Edit Building
-  const handleAddBuilding = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBuildingError(null);
-    if (!newBuildingName.trim()) {
-      setBuildingError('Building name is required.');
-      return;
-    }
-
-    if (isDuplicateBuildingName(buildings, newBuildingName, editingBuilding?.buildingId)) {
-      setBuildingError(`A building named "${newBuildingName.trim()}" already exists.`);
-      return;
-    }
-
-    const coverImage = newBuildingImage.trim() || '/assets/extracted/the_alcoves.png';
-
-    try {
-      if (editingBuilding) {
-        const updatedDoc: BuildingDoc = {
-          ...editingBuilding,
-          buildingName: newBuildingName.trim(),
-          location: newBuildingLocation,
-          address: newBuildingAddress.trim(),
-          description: newBuildingDescription.trim() || 'A premier development in Cebu.',
-          buildingImages: [
-            coverImage,
-            ...(editingBuilding.buildingImages || []).filter((img) => img !== coverImage).slice(0, 4),
-          ],
-          updatedAt: new Date().toISOString(),
-        };
-
-        await updateDoc(doc(db, 'buildings', editingBuilding.buildingId), updatedDoc as any);
-        onBuildingAdded(updatedDoc);
-      } else {
-        const bldId = `bld-${Date.now()}`;
-        const buildingDoc: BuildingDoc = {
-          buildingId: bldId,
-          buildingName: newBuildingName.trim(),
-          location: newBuildingLocation,
-          address: newBuildingAddress.trim(),
-          description: newBuildingDescription.trim() || 'A premier development in Cebu.',
-          buildingImages: [coverImage],
-          amenities: ['24/7 Concierge', 'Elevators', 'Swimming Pool', 'Security'],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        await setDoc(doc(db, 'buildings', bldId), buildingDoc);
-        onBuildingAdded(buildingDoc);
-      }
-
-      setIsAddBuildingOpen(false);
-      setEditingBuilding(null);
-      setNewBuildingName('');
-      setNewBuildingAddress('');
-      setNewBuildingDescription('');
-      setNewBuildingImage('/assets/extracted/the_alcoves.png');
-    } catch (err: any) {
-      setBuildingError(`Could not save building: ${err.message}`);
-    }
+      },
+    });
   };
 
   return (
@@ -904,7 +1258,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
             <span className="text-[10px] opacity-75">{buildings.length}</span>
           </button>
 
-          {/* 5. Locations */}
+          {/* 5. Neighborhood & Areas */}
           <button
             type="button"
             onClick={() => setActiveSection('locations')}
@@ -916,7 +1270,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           >
             <div className="flex items-center gap-2">
               <MapPin className="w-4 h-4 flex-shrink-0" />
-              <span>Locations</span>
+              <span>Neighborhood &amp; Areas</span>
             </div>
             <span className="text-[10px] opacity-75">{locationsList.length}</span>
           </button>
@@ -938,7 +1292,24 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
             <span className="text-[10px] opacity-75">{agents.length}</span>
           </button>
 
-          {/* 7. Customer Inquiries */}
+          {/* 7. Editors (Super Admin User Role Management) */}
+          <button
+            type="button"
+            onClick={() => setActiveSection('editors')}
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
+              activeSection === 'editors'
+                ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
+                : 'text-white/80 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <UserCog className="w-4 h-4 flex-shrink-0" />
+              <span>Editors</span>
+            </div>
+            <span className="text-[10px] opacity-75">{editors.length}</span>
+          </button>
+
+          {/* 8. Customer Inquiries */}
           <button
             type="button"
             onClick={() => setActiveSection('inquiries')}
@@ -955,7 +1326,27 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
             <span className="text-[10px] opacity-75">{inquiries.length}</span>
           </button>
 
-          {/* 8. Website Settings */}
+          {/* 9. Audit Logs */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSection('audit');
+              loadAuditLogs();
+            }}
+            className={`w-auto md:w-full flex-shrink-0 text-left px-3.5 min-h-[40px] py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-colors whitespace-nowrap ${
+              activeSection === 'audit'
+                ? 'bg-[#C6A878] text-[#17243B] font-bold shadow-md'
+                : 'text-white/80 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 flex-shrink-0" />
+              <span>Audit Logs</span>
+            </div>
+            <span className="text-[10px] opacity-75">{auditLogs.length}</span>
+          </button>
+
+          {/* 10. Website Settings */}
           <button
             type="button"
             onClick={() => setActiveSection('settings')}
@@ -975,6 +1366,33 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
         {/* Ivory Main Content Area */}
         <main className="flex-1 p-3 sm:p-8 max-w-7xl w-full mx-auto space-y-5 sm:space-y-6 min-w-0">
+          {/* Action Feedback Banner */}
+          {actionNotice && (
+            <div
+              className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between gap-3 ${
+                actionNotice.type === 'error'
+                  ? 'bg-rose-50 border-rose-200 text-rose-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {actionNotice.type === 'error' ? (
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                )}
+                <span className="font-medium">{actionNotice.text}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActionNotice(null)}
+                className="text-xs font-bold opacity-70 hover:opacity-100 whitespace-nowrap"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* New Inquiries Quick Notice Banner */}
           {inquiries.filter((i) => i.status === 'new').length > 0 && activeSection !== 'inquiries' && (
             <div className="bg-gradient-to-r from-amber-500/10 via-[#C6A878]/15 to-amber-500/10 border border-[#C6A878]/50 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
@@ -1165,7 +1583,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto text-xs pb-1 sm:pb-0">
-                    {(['all', 'approved', 'pending', 'rejected', 'draft'] as const).map((s) => (
+                    {(['all', 'approved', 'pending', 'rejected', 'draft', 'archived'] as const).map((s) => (
                       <button
                         type="button"
                         key={s}
@@ -1239,6 +1657,8 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     ? 'bg-amber-100 text-amber-800 border-amber-200'
                                     : prop.status === 'rejected'
                                     ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                    : prop.status === 'archived'
+                                    ? 'bg-slate-200 text-slate-600 border-slate-300'
                                     : 'bg-slate-100 text-slate-700 border-slate-200'
                                 }`}
                               >
@@ -1246,6 +1666,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 <option value="pending">pending</option>
                                 <option value="rejected">rejected</option>
                                 <option value="draft">draft</option>
+                                <option value="archived">archived</option>
                               </select>
                             </td>
                             <td className="px-4 py-3 text-center">
@@ -1265,11 +1686,12 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                               </button>
                             </td>
                             <td className="px-5 py-3 text-right whitespace-nowrap">
-                              <div className="flex items-center justify-end gap-1.5">
+                              <div className="flex items-center justify-end gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => onSelectPropertyPreview(prop)}
-                                  title="Preview"
+                                  onClick={() => setContentPreview({ type: 'property', item: prop })}
+                                  title="Preview Listing"
+                                  aria-label={`Preview ${prop.propertyTitle}`}
                                   className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
@@ -1280,15 +1702,40 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     setEditingProperty(prop);
                                     setIsAddPropertyOpen(true);
                                   }}
-                                  title="Edit"
+                                  title="Edit Listing"
+                                  aria-label={`Edit ${prop.propertyTitle}`}
                                   className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100"
                                 >
                                   <Edit className="w-3.5 h-3.5" />
                                 </button>
+                                {prop.status === 'archived' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleChangePropertyStatus(prop, prop.previousStatus || 'draft')
+                                    }
+                                    title="Restore Archived Property"
+                                    aria-label={`Restore ${prop.propertyTitle}`}
+                                    className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleChangePropertyStatus(prop, 'archived')}
+                                    title="Archive Property"
+                                    aria-label={`Archive ${prop.propertyTitle}`}
+                                    className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50"
+                                  >
+                                    <Archive className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
-                                  onClick={(e) => handleDeleteProperty(prop.propertyId, e)}
-                                  title="Delete"
+                                  onClick={(e) => handleDeleteProperty(prop, e)}
+                                  title="Delete Property"
+                                  aria-label={`Delete ${prop.propertyTitle}`}
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -1433,18 +1880,30 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                             <td className="px-4 py-3.5 text-right">
                               <div className="flex items-center justify-end gap-2">
                                 <button
+                                  type="button"
+                                  onClick={() => handleAssignRole(agent, 'editor')}
+                                  title="Assign Editor role to this staff member"
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 flex items-center gap-1 transition-colors whitespace-nowrap"
+                                >
+                                  <UserCog className="w-3.5 h-3.5" />
+                                  <span>Make Editor</span>
+                                </button>
+
+                                <button
+                                  type="button"
                                   onClick={() => handleProvisionAgentAuth(agent)}
                                   title="Provision / View Firebase Auth Login"
-                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-[#C6A878] hover:text-[#17243B] flex items-center gap-1 transition-colors"
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-[#C6A878] hover:text-[#17243B] flex items-center gap-1 transition-colors whitespace-nowrap"
                                 >
                                   <Key className="w-3.5 h-3.5" />
                                   <span>Sync Auth</span>
                                 </button>
 
                                 <button
+                                  type="button"
                                   onClick={() => handleToggleAgentStatus(agent)}
                                   title={agent.status === 'active' ? 'Disable Agent' : 'Enable Agent'}
-                                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap ${
                                     agent.status === 'active'
                                       ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
                                       : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
@@ -1464,6 +1923,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 </button>
 
                                 <button
+                                  type="button"
                                   onClick={() => handleDeleteAgent(agent)}
                                   title="Delete Agent"
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
@@ -1474,6 +1934,169 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                             </td>
                           </tr>
                         ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION 3B: EDITOR ACCOUNT & ROLE MANAGEMENT (SUPER ADMIN ONLY) */}
+          {activeSection === 'editors' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
+                    Editorial Staff &amp; Role Management
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Create Editor accounts, assign Editor roles, initiate password resets, disable logins, or revoke Editor access. Editors maintain content across Properties, Buildings, and Neighborhoods without Super Admin access.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatedEditorInfo(null);
+                    setActionError(null);
+                    setIsCreateEditorOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create Editor Account</span>
+                </button>
+              </div>
+
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="relative w-full sm:w-80">
+                  <input
+                    type="text"
+                    value={editorSearch}
+                    onChange={(e) => setEditorSearch(e.target.value)}
+                    placeholder="Search editors by name or email..."
+                    className="w-full px-3.5 py-2 pl-9 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                  />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                </div>
+                <span className="text-xs text-slate-500">
+                  {editors.filter((ed) => ed.status === 'active').length} active of {editors.length} editors
+                </span>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-700">
+                    <thead className="bg-[#17243B] text-white uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="px-5 py-3.5">Editor Name</th>
+                        <th className="px-4 py-3.5">Work Email</th>
+                        <th className="px-4 py-3.5">Role</th>
+                        <th className="px-4 py-3.5">Account Status</th>
+                        <th className="px-4 py-3.5">Created Date</th>
+                        <th className="px-5 py-3.5 text-right">Super Admin Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {editors
+                        .filter(
+                          (ed) =>
+                            ed.displayName.toLowerCase().includes(editorSearch.toLowerCase()) ||
+                            ed.email.toLowerCase().includes(editorSearch.toLowerCase())
+                        )
+                        .map((ed) => (
+                          <tr key={ed.uid} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-5 py-3.5 font-bold text-slate-900 whitespace-nowrap">
+                              {ed.displayName}
+                            </td>
+                            <td className="px-4 py-3.5 text-slate-600 whitespace-nowrap">
+                              {ed.email}
+                            </td>
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase bg-indigo-100 text-indigo-800">
+                                {ed.role}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
+                                  ed.status === 'active'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {ed.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-slate-500 whitespace-nowrap">
+                              {ed.createdAt ? new Date(ed.createdAt).toLocaleDateString() : '—'}
+                            </td>
+                            <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetEditorPassword(ed)}
+                                  title="Send / generate password reset"
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-[#C6A878] hover:text-[#17243B] flex items-center gap-1 transition-colors whitespace-nowrap"
+                                >
+                                  <Key className="w-3.5 h-3.5" />
+                                  <span>Reset Password</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleEditorStatus(ed)}
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap ${
+                                    ed.status === 'active'
+                                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  }`}
+                                >
+                                  {ed.status === 'active' ? (
+                                    <>
+                                      <UserX className="w-3.5 h-3.5" />
+                                      <span>Disable</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <UserCheck className="w-3.5 h-3.5" />
+                                      <span>Enable</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignRole(ed, 'agent')}
+                                  title="Reassign role to Agent"
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap"
+                                >
+                                  Make Agent
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveEditorAccess(ed)}
+                                  title="Remove Editor access"
+                                  aria-label={`Remove Editor access for ${ed.displayName}`}
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center gap-1 transition-colors whitespace-nowrap"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Remove Access</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      {editors.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-slate-400">
+                            {isLoadingEditors
+                              ? 'Loading Editor accounts...'
+                              : 'No Editor accounts configured yet. Click "Create Editor Account" above to onboard editorial staff.'}
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1597,7 +2220,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       <MapPin className="w-4 h-4 text-[#C6A878]" />
                       <span>Properties by Cebu District</span>
                     </h3>
-                    <span className="text-xs text-slate-400 font-medium">{locationsList.length} Locations</span>
+                    <span className="text-xs text-slate-400 font-medium">{locationsList.length} Areas</span>
                   </div>
 
                   <div className="space-y-3">
@@ -1696,207 +2319,408 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           )}
 
           {/* SECTION 4: BUILDINGS & DEVELOPMENTS */}
-          {activeSection === 'buildings' && (
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
-                    Buildings & Development Complexes
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Manage real estate developments in Cebu. Units and residences are associated with these master complexes.
-                  </p>
-                </div>
+          {activeSection === 'buildings' && (() => {
+            const filteredBuildings = buildings.filter((b) => {
+              if (buildingStatusFilter === 'all') return true;
+              return getEffectivePublishStatus(b) === buildingStatusFilter;
+            });
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingBuilding(null);
-                    setBuildingError(null);
-                    setNewBuildingName('');
-                    setNewBuildingLocation(locationsList[0]?.name || 'Cebu Business Park');
-                    setNewBuildingAddress('');
-                    setNewBuildingDescription('');
-                    setNewBuildingImage('/assets/extracted/the_alcoves.png');
-                    setIsAddBuildingOpen(true);
-                  }}
-                  className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs hover:bg-[#253754] transition-colors whitespace-nowrap"
-                >
-                  <Plus className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>Add Building</span>
-                </button>
-              </div>
+            return (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
+                      Buildings &amp; Development Complexes
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Manage building architecture, cover &amp; gallery images, coordinates, SEO, and publication state.
+                    </p>
+                  </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {buildings.map((bld) => {
-                  const associatedProps = properties.filter((p) => p.buildingId === bld.buildingId);
-                  return (
-                    <div
-                      key={bld.buildingId}
-                      className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between"
-                    >
-                      <div className="aspect-[16/10] bg-slate-100 relative">
-                        <img
-                          src={bld.buildingImages[0] || '/assets/extracted/the_alcoves.png'}
-                          alt={bld.buildingName}
-                          className="w-full h-full object-cover"
-                        />
-                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#17243B]/80 text-[#C6A878] text-[10px] font-bold">
-                          {bld.location}
-                        </span>
-                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-white/90 text-[#17243B] text-[10px] font-bold shadow-sm">
-                          {associatedProps.length} Units
-                        </span>
-                      </div>
-
-                      <div className="p-4 flex-1 flex flex-col justify-between">
-                        <div>
-                          <h3 className="font-bold text-sm text-[#17243B]">{bld.buildingName}</h3>
-                          <p className="text-[11px] text-slate-500 mt-0.5">{bld.address}</p>
-                          <p className="text-xs text-slate-600 mt-2 line-clamp-2">{bld.description}</p>
-                        </div>
-
-                        <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                          <button
-                            type="button"
-                            onClick={() => setViewingBuildingProperties(bld)}
-                            className="font-semibold text-[#17243B] hover:text-[#C6A878] text-[11px] flex items-center gap-1 whitespace-nowrap"
-                          >
-                            <Eye className="w-3 h-3 flex-shrink-0" />
-                            <span>View Units ({associatedProps.length})</span>
-                          </button>
-
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingBuilding(bld);
-                                setBuildingError(null);
-                                setNewBuildingName(bld.buildingName);
-                                setNewBuildingLocation(bld.location);
-                                setNewBuildingAddress(bld.address);
-                                setNewBuildingDescription(bld.description);
-                                setNewBuildingImage(
-                                  bld.buildingImages?.[0] || '/assets/extracted/the_alcoves.png'
-                                );
-                                setIsAddBuildingOpen(true);
-                              }}
-                              title="Edit Building"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-[#17243B] hover:bg-slate-100"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={async () => {
-                                if (associatedProps.length > 0) {
-                                  alert(
-                                    `Cannot delete "${bld.buildingName}" because it has ${associatedProps.length} property listing(s) associated with it. Please reassign or delete those properties first.`
-                                  );
-                                  return;
-                                }
-                                if (window.confirm(`Delete building ${bld.buildingName}?`)) {
-                                  await deleteDoc(doc(db, 'buildings', bld.buildingId));
-                                  onBuildingDeleted(bld.buildingId);
-                                }
-                              }}
-                              title="Delete Building"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* SECTION: LOCATIONS MANAGEMENT */}
-          {activeSection === 'locations' && (
-            <div className="space-y-6">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
-                    Cebu Prime Districts & Locations
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Add, edit, or delete designated real estate zones. Changes reflect across search filters and the public showcase.
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="px-3.5 py-1.5 rounded-full bg-slate-100 text-[#17243B] text-xs font-bold">
-                    {locationsList.length} Active Districts
-                  </span>
                   <button
-                    onClick={openAddLocationModal}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors"
+                    type="button"
+                    onClick={() => {
+                      setEditingBuilding(null);
+                      setIsAddBuildingOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold text-xs hover:bg-[#253754] transition-colors whitespace-nowrap"
                   >
-                    <Plus className="w-4 h-4" />
-                    <span>Add New District</span>
+                    <Plus className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>Add Building</span>
                   </button>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {locationsList.map((loc) => {
-                  const locProps = properties.filter((p) => p.location.toLowerCase() === loc.name.toLowerCase());
-                  const locBuildings = buildings.filter((b) => b.location.toLowerCase() === loc.name.toLowerCase());
-                  return (
-                    <div
-                      key={loc.id}
-                      className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between group hover:shadow-md transition-shadow"
+                {/* Filter Tabs */}
+                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
+                  {(['all', 'published', 'unpublished', 'archived'] as const).map((tab) => (
+                    <button
+                      type="button"
+                      key={tab}
+                      onClick={() => setBuildingStatusFilter(tab)}
+                      className={`px-3.5 min-h-[36px] rounded-full font-semibold capitalize transition-colors whitespace-nowrap ${
+                        buildingStatusFilter === tab
+                          ? 'bg-[#17243B] text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
                     >
-                      <div className="aspect-[16/10] bg-slate-100 relative">
-                        <img
-                          src={loc.image || '/assets/extracted/photo_the_alcoves.png'}
-                          alt={loc.name}
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-[#17243B]/85 via-black/20 to-transparent" />
-                        <div className="absolute bottom-2.5 left-3 right-3 text-white">
-                          <h4 className="font-bold text-sm leading-tight">{loc.name}</h4>
-                          <span className="text-[10px] text-[#C6A878] font-medium">{loc.tagline}</span>
-                        </div>
-                      </div>
+                      {tab} (
+                      {tab === 'all'
+                        ? buildings.length
+                        : buildings.filter((b) => getEffectivePublishStatus(b) === tab).length}
+                      )
+                    </button>
+                  ))}
+                </div>
 
-                      <div className="p-4 flex-1 flex flex-col justify-between">
-                        <p className="text-xs text-slate-600 line-clamp-2 mb-3">{loc.description}</p>
-                        
-                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                          <div className="flex flex-col text-[11px]">
-                            <span className="font-bold text-[#17243B]">{locProps.length} Properties</span>
-                            <span className="text-slate-400">{locBuildings.length} Developments</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filteredBuildings.map((bld) => {
+                    const associatedProps = properties.filter((p) => p.buildingId === bld.buildingId);
+                    const bldStatus = getEffectivePublishStatus(bld);
+                    return (
+                      <div
+                        key={bld.buildingId}
+                        className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between"
+                      >
+                        <div className="aspect-[16/10] bg-slate-100 relative">
+                          <img
+                            src={bld.buildingImages[0] || '/assets/extracted/the_alcoves.png'}
+                            alt={bld.buildingName}
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#17243B]/85 text-[#C6A878] text-[10px] font-bold">
+                            {bld.location}
+                          </span>
+                          <span
+                            className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shadow-sm ${
+                              bldStatus === 'published'
+                                ? 'bg-emerald-600 text-white'
+                                : bldStatus === 'unpublished'
+                                ? 'bg-slate-700 text-white'
+                                : 'bg-amber-600 text-white'
+                            }`}
+                          >
+                            {bldStatus}
+                          </span>
+                        </div>
+
+                        <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                          <div>
+                            <h3 className="font-bold text-sm text-[#17243B]">{bld.buildingName}</h3>
+                            <p className="text-[11px] text-slate-500 mt-0.5">{bld.address}</p>
+                            <p className="text-xs text-slate-600 mt-2 line-clamp-2">{bld.description}</p>
                           </div>
 
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => openEditLocationModal(loc)}
-                              title="Edit District"
-                              className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100 transition-colors"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteLocation(loc.id, loc.name)}
-                              title="Delete District"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="pt-3 border-t border-slate-100 space-y-2 text-xs text-slate-500">
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setViewingBuildingProperties(bld)}
+                                className="font-semibold text-[#17243B] hover:text-[#C6A878] text-[11px] flex items-center gap-1 whitespace-nowrap"
+                              >
+                                <Building className="w-3 h-3 flex-shrink-0" />
+                                <span>{associatedProps.length} Units</span>
+                              </button>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setContentPreview({ type: 'building', item: bld })}
+                                  title="Preview Building"
+                                  aria-label={`Preview ${bld.buildingName}`}
+                                  className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingBuilding(bld);
+                                    setIsAddBuildingOpen(true);
+                                  }}
+                                  title="Edit Building"
+                                  aria-label={`Edit ${bld.buildingName}`}
+                                  className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => requestDeleteBuilding(bld)}
+                                  title="Delete Building"
+                                  aria-label={`Delete ${bld.buildingName}`}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {bldStatus !== 'archived' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleChangeBuildingStatus(
+                                      bld,
+                                      bldStatus === 'published' ? 'unpublished' : 'published'
+                                    )
+                                  }
+                                  className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-[#17243B] hover:text-[#C6A878] text-slate-700 text-[11px] font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  {bldStatus === 'published' ? (
+                                    <>
+                                      <EyeOff className="w-3 h-3" />
+                                      <span>Unpublish</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Globe className="w-3 h-3" />
+                                      <span>Publish</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
+                              {bldStatus === 'archived' ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleChangeBuildingStatus(
+                                      bld,
+                                      bld.previousStatus || 'unpublished'
+                                    )
+                                  }
+                                  className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[11px] font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Restore</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleChangeBuildingStatus(bld, 'archived')}
+                                  className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  <Archive className="w-3 h-3" />
+                                  <span>Archive</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
+                    );
+                  })}
+                  {filteredBuildings.length === 0 && (
+                    <div className="col-span-full p-8 text-center bg-white rounded-2xl border border-slate-200 text-slate-400 text-xs">
+                      No buildings match the selected publication filter.
                     </div>
-                  );
-                })}
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
+
+          {/* SECTION 5: NEIGHBORHOOD & AREAS MANAGEMENT */}
+          {activeSection === 'locations' && (() => {
+            const filteredLocations = locationsList.filter((l) => {
+              if (locationStatusFilter === 'all') return true;
+              return getEffectivePublishStatus(l) === locationStatusFilter;
+            });
+
+            return (
+              <div className="space-y-6">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
+                      Cebu Prime Neighborhood &amp; Areas
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Manage neighborhood guides, highlights, transit, cover &amp; gallery images, SEO, and publication state.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="px-3.5 py-1.5 rounded-full bg-slate-100 text-[#17243B] text-xs font-bold whitespace-nowrap">
+                      {locationsList.length} Areas
+                    </span>
+                    <button
+                      type="button"
+                      onClick={openAddLocationModal}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md transition-colors whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4 flex-shrink-0" />
+                      <span>Add Neighborhood</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
+                  {(['all', 'published', 'unpublished', 'archived'] as const).map((tab) => (
+                    <button
+                      type="button"
+                      key={tab}
+                      onClick={() => setLocationStatusFilter(tab)}
+                      className={`px-3.5 min-h-[36px] rounded-full font-semibold capitalize transition-colors whitespace-nowrap ${
+                        locationStatusFilter === tab
+                          ? 'bg-[#17243B] text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {tab} (
+                      {tab === 'all'
+                        ? locationsList.length
+                        : locationsList.filter((l) => getEffectivePublishStatus(l) === tab).length}
+                      )
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filteredLocations.map((loc) => {
+                    const locProps = properties.filter((p) =>
+                      matchesNeighborhoodName(p.location, loc.name)
+                    );
+                    const locBuildings = buildings.filter((b) =>
+                      matchesNeighborhoodName(b.location, loc.name)
+                    );
+                    const locStatus = getEffectivePublishStatus(loc);
+                    return (
+                      <div
+                        key={loc.id}
+                        className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between group hover:shadow-md transition-shadow"
+                      >
+                        <div className="aspect-[16/10] bg-slate-100 relative">
+                          <img
+                            src={loc.image || '/assets/extracted/photo_the_alcoves.png'}
+                            alt={loc.name}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-[#17243B]/85 via-black/20 to-transparent" />
+                          <span
+                            className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase shadow-sm ${
+                              locStatus === 'published'
+                                ? 'bg-emerald-600 text-white'
+                                : locStatus === 'unpublished'
+                                ? 'bg-slate-700 text-white'
+                                : 'bg-amber-600 text-white'
+                            }`}
+                          >
+                            {locStatus}
+                          </span>
+                          <div className="absolute bottom-2.5 left-3 right-3 text-white">
+                            <h4 className="font-bold text-sm leading-tight">{loc.name}</h4>
+                            <span className="text-[10px] text-[#C6A878] font-medium">{loc.tagline}</span>
+                          </div>
+                        </div>
+
+                        <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                          <p className="text-xs text-slate-600 line-clamp-2">{loc.description}</p>
+
+                          <div className="pt-3 border-t border-slate-100 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex flex-col text-[11px]">
+                                <span className="font-bold text-[#17243B]">{locProps.length} Properties</span>
+                                <span className="text-slate-400">{locBuildings.length} Developments</span>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setContentPreview({ type: 'neighborhood', item: loc })}
+                                  title="Preview Neighborhood"
+                                  aria-label={`Preview ${loc.name}`}
+                                  className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100 transition-colors"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditLocationModal(loc)}
+                                  title="Edit Neighborhood"
+                                  aria-label={`Edit ${loc.name}`}
+                                  className="p-1.5 rounded-lg text-slate-500 hover:text-[#17243B] hover:bg-slate-100 transition-colors"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => requestDeleteLocation(loc)}
+                                  title="Delete Neighborhood"
+                                  aria-label={`Delete ${loc.name}`}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              {locStatus !== 'archived' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleChangeLocationStatus(
+                                      loc,
+                                      locStatus === 'published' ? 'unpublished' : 'published'
+                                    )
+                                  }
+                                  className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-[#17243B] hover:text-[#C6A878] text-slate-700 font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  {locStatus === 'published' ? (
+                                    <>
+                                      <EyeOff className="w-3 h-3" />
+                                      <span>Unpublish</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Globe className="w-3 h-3" />
+                                      <span>Publish</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
+                              {locStatus === 'archived' ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleChangeLocationStatus(
+                                      loc,
+                                      loc.previousStatus || 'unpublished'
+                                    )
+                                  }
+                                  className="flex-1 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Restore</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleChangeLocationStatus(loc, 'archived')}
+                                  className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold transition-colors whitespace-nowrap"
+                                >
+                                  <Archive className="w-3 h-3" />
+                                  <span>Archive</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filteredLocations.length === 0 && (
+                    <div className="col-span-full p-8 text-center bg-white rounded-2xl border border-slate-200 text-slate-400 text-xs">
+                      No neighborhoods match the selected publication filter.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* SECTION 7: CUSTOMER INQUIRIES */}
           {activeSection === 'inquiries' && (
@@ -2087,6 +2911,145 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
             </div>
           )}
 
+          {/* SECTION 7B: CONTENT AUDIT LOGS (SUPER ADMIN ONLY) */}
+          {activeSection === 'audit' && (() => {
+            const filteredLogs = auditLogs.filter((log) => {
+              if (auditTypeFilter !== 'all' && log.contentType !== auditTypeFilter) return false;
+              if (auditSearch.trim()) {
+                const q = auditSearch.toLowerCase();
+                return (
+                  (log.contentTitle || '').toLowerCase().includes(q) ||
+                  (log.editorName || '').toLowerCase().includes(q) ||
+                  (log.editorEmail || '').toLowerCase().includes(q) ||
+                  (log.summary || '').toLowerCase().includes(q)
+                );
+              }
+              return true;
+            });
+
+            return (
+              <div className="space-y-6">
+                <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
+                      Editorial Content Audit Trail
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Immutable record of all Editor and Admin content edits across Properties, Buildings, and Neighborhood guides.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={loadAuditLogs}
+                    disabled={isLoadingAuditLogs}
+                    className="inline-flex items-center gap-1.5 px-4 min-h-[40px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-[#17243B] text-xs font-semibold whitespace-nowrap disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAuditLogs ? 'animate-spin' : ''}`} />
+                    <span>Refresh Logs</span>
+                  </button>
+                </div>
+
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="relative w-full sm:w-80">
+                    <input
+                      type="text"
+                      value={auditSearch}
+                      onChange={(e) => setAuditSearch(e.target.value)}
+                      placeholder="Filter by editor, email, or record title..."
+                      className="w-full h-10 px-3.5 pl-9 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
+                    />
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                  </div>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto text-xs pb-1 sm:pb-0">
+                    {(['all', 'property', 'building', 'neighborhood'] as const).map((t) => (
+                      <button
+                        type="button"
+                        key={t}
+                        onClick={() => setAuditTypeFilter(t)}
+                        className={`px-3.5 min-h-[36px] rounded-full font-semibold capitalize transition-colors whitespace-nowrap ${
+                          auditTypeFilter === t
+                            ? 'bg-[#17243B] text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-700">
+                      <thead className="bg-[#17243B] text-white uppercase text-[10px] tracking-wider">
+                        <tr>
+                          <th className="px-5 py-3.5">Timestamp</th>
+                          <th className="px-4 py-3.5">Staff Member</th>
+                          <th className="px-4 py-3.5">Action</th>
+                          <th className="px-4 py-3.5">Content Record</th>
+                          <th className="px-4 py-3.5">Changed Fields</th>
+                          <th className="px-5 py-3.5">Summary</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredLogs.map((log) => (
+                          <tr key={log.logId} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-5 py-3 text-slate-500 font-mono text-[11px] whitespace-nowrap">
+                              {new Date(log.timestamp).toLocaleString()}
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <div className="font-bold text-slate-900">{log.editorName || 'Staff'}</div>
+                              <div className="text-[10px] text-slate-500">
+                                {log.editorEmail} • <span className="uppercase font-semibold">{log.editorRole}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-100 text-[#17243B] border border-slate-200">
+                                {log.action}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="text-[10px] uppercase font-bold text-[#C6A878] block">
+                                {log.contentType}
+                              </span>
+                              <span className="font-semibold text-slate-800">{log.contentTitle}</span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                {(log.changedFields || []).map((field) => (
+                                  <span
+                                    key={field}
+                                    className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px]"
+                                  >
+                                    {field}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-5 py-3 text-slate-600 max-w-[260px]">
+                              {log.summary}
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredLogs.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-slate-400">
+                              {isLoadingAuditLogs
+                                ? 'Loading editorial audit logs...'
+                                : 'No editorial content changes recorded yet.'}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* SECTION 8: WEBSITE SETTINGS */}
           {activeSection === 'settings' && (
             <div className="space-y-6">
@@ -2270,7 +3233,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                         updatedSlides[sIdx] = { ...slide, image: res.url };
                                         setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
                                       } catch (err: any) {
-                                        alert('Upload failed: ' + (err.message || 'Please check Storage rules'));
+                                        setActionNotice({
+                                          type: 'error',
+                                          text: 'Slide upload failed: ' + (err.message || 'Check Storage rules'),
+                                        });
                                       }
                                     }}
                                   />
@@ -2753,6 +3719,178 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         </div>
       )}
 
+      {/* MODAL: CREATE EDITOR ACCOUNT (SUPER ADMIN ONLY) */}
+      {isCreateEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
+                <UserCog className="w-5 h-5 text-[#C6A878]" />
+                <span>Create Editorial Staff Account</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsCreateEditorOpen(false)}
+                className="w-7 h-7 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {createdEditorInfo ? (
+              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-2 text-xs">
+                <div className="font-bold text-emerald-700 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Editor Account Created!</span>
+                </div>
+                <p>Share these login credentials with the Editor:</p>
+                <div className="bg-white p-3 rounded-lg border border-emerald-200 font-mono text-[11px] text-slate-800 space-y-1">
+                  <div><strong>Email:</strong> {createdEditorInfo.email}</div>
+                  <div><strong>Temporary Password:</strong> {createdEditorInfo.pass}</div>
+                  <div><strong>Assigned Role:</strong> EDITOR</div>
+                </div>
+                {createdEditorInfo.warning && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px]">
+                    {createdEditorInfo.warning}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatedEditorInfo(null);
+                    setIsCreateEditorOpen(false);
+                  }}
+                  className="w-full mt-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleCreateEditor} className="space-y-3.5 text-xs">
+                {actionError && (
+                  <div className="p-2.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200">
+                    {actionError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Editor Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={newEditorName}
+                    onChange={(e) => setNewEditorName(e.target.value)}
+                    placeholder="e.g. Camille Reyes"
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-[#C6A878]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Work Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    value={newEditorEmail}
+                    onChange={(e) => setNewEditorEmail(e.target.value)}
+                    placeholder="editor@cebuprimeproperties.ph"
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-[#C6A878]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Temporary Password (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newEditorPassword}
+                    onChange={(e) => setNewEditorPassword(e.target.value)}
+                    placeholder="Auto-generated if left blank"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-[#C6A878]"
+                  />
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreateEditorOpen(false)}
+                    className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isCreatingEditor}
+                    className="px-4 py-2 rounded-xl bg-[#17243B] text-[#C6A878] font-bold disabled:opacity-50"
+                  >
+                    {isCreatingEditor ? 'Provisioning...' : 'Create Editor Account'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PASSWORD RESET STATUS */}
+      {resetLinkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 border border-slate-200 shadow-2xl space-y-4 text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
+                <Key className="w-5 h-5 text-[#C6A878]" />
+                <span>Editor Password Reset Initiated</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setResetLinkModal(null)}
+                className="w-7 h-7 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-slate-600">
+              Target Account: <strong className="text-[#17243B]">{resetLinkModal.email}</strong>
+            </p>
+            {resetLinkModal.resetEmailSent && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">
+                Firebase Authentication password reset email dispatched to {resetLinkModal.email}.
+              </div>
+            )}
+            {resetLinkModal.resetLink && (
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                <span className="font-semibold text-slate-700 block">Direct Password Reset Link:</span>
+                <input
+                  type="text"
+                  readOnly
+                  value={resetLinkModal.resetLink}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-mono text-[11px] bg-white"
+                />
+              </div>
+            )}
+            {resetLinkModal.note && !resetLinkModal.resetEmailSent && !resetLinkModal.resetLink && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
+                {resetLinkModal.note}
+              </div>
+            )}
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setResetLinkModal(null)}
+                className="px-4 py-2 rounded-xl bg-[#17243B] text-white font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: REJECTION REASON */}
       {rejectionModalOpen && reviewingProperty && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
@@ -2791,10 +3929,20 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
               </span>
             </div>
 
+            {actionError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{actionError}</span>
+              </div>
+            )}
+
             <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setRejectionModalOpen(false)}
+                onClick={() => {
+                  setActionError(null);
+                  setRejectionModalOpen(false);
+                }}
                 className="px-4 py-2 rounded-xl border border-slate-300 text-slate-600 font-semibold"
               >
                 Cancel
@@ -2811,139 +3959,27 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         </div>
       )}
 
-      {/* MODAL: ADD / EDIT BUILDING */}
-      {isAddBuildingOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-white rounded-2xl w-full max-w-md p-5 sm:p-6 border border-slate-200 shadow-2xl space-y-4 text-xs my-auto max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
-                <Building className="w-5 h-5 text-[#C6A878]" />
-                <span>{editingBuilding ? 'Edit Building Development' : 'Add Building Development'}</span>
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsAddBuildingOpen(false)}
-                className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-700 flex items-center justify-center"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {buildingError && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{buildingError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleAddBuilding} className="space-y-3">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Building Name *</label>
-                <input
-                  type="text"
-                  value={newBuildingName}
-                  onChange={(e) => setNewBuildingName(e.target.value)}
-                  placeholder="e.g. Horizons 101"
-                  required
-                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Location District *</label>
-                <select
-                  value={newBuildingLocation}
-                  onChange={(e) => setNewBuildingLocation(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs bg-white"
-                >
-                  {Array.from(
-                    new Set([
-                      ...locationsList.map((l) => l.name),
-                      ...(editingBuilding?.location ? [editingBuilding.location] : []),
-                    ])
-                  ).map((locName) => (
-                    <option key={locName} value={locName}>
-                      {locName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Street Address</label>
-                <input
-                  type="text"
-                  value={newBuildingAddress}
-                  onChange={(e) => setNewBuildingAddress(e.target.value)}
-                  placeholder="e.g. General Maxilom Ave, Cebu City"
-                  className="w-full h-10 px-3 rounded-xl border border-slate-300 text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Summary</label>
-                <textarea
-                  value={newBuildingDescription}
-                  onChange={(e) => setNewBuildingDescription(e.target.value)}
-                  rows={2}
-                  placeholder="Developer details and masterplan overview..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-700">Building Cover Photograph</label>
-                  <label className="cursor-pointer text-[11px] font-bold text-[#17243B] hover:text-[#C6A878] inline-flex items-center gap-1">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>{isUploadingBuildingImg ? 'Uploading...' : 'Upload Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      disabled={isUploadingBuildingImg}
-                      onChange={handleBuildingImageUpload}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-                <input
-                  type="text"
-                  value={newBuildingImage}
-                  onChange={(e) => setNewBuildingImage(e.target.value)}
-                  placeholder="/assets/extracted/the_alcoves.png"
-                  className="w-full h-9 px-3 rounded-xl border border-slate-300 text-xs font-mono"
-                />
-                {newBuildingImage && (
-                  <div className="aspect-[16/9] rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
-                    <img
-                      src={newBuildingImage}
-                      alt="Building Cover Preview"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddBuildingOpen(false)}
-                  className="px-4 min-h-[40px] rounded-xl border border-slate-300 text-slate-600 font-semibold whitespace-nowrap"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUploadingBuildingImg}
-                  className="px-4 min-h-[40px] rounded-xl bg-[#17243B] text-[#C6A878] font-bold whitespace-nowrap disabled:opacity-50"
-                >
-                  {editingBuilding ? 'Update Building' : 'Save Building'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <BuildingFormModal
+        isOpen={isAddBuildingOpen}
+        onClose={() => {
+          setIsAddBuildingOpen(false);
+          setEditingBuilding(null);
+        }}
+        editingBuilding={editingBuilding}
+        existingBuildings={buildings}
+        locations={locationsList}
+        otherReferencedImageUrls={getOtherReferencedUrls({
+          buildingId: editingBuilding?.buildingId,
+        })}
+        onSaved={(savedBld) => {
+          onBuildingAdded(savedBld);
+          setActionNotice({
+            type: 'success',
+            text: `Building "${savedBld.buildingName}" saved cleanly.`,
+          });
+        }}
+        onPreview={(bld) => setContentPreview({ type: 'building', item: bld })}
+      />
 
       {/* MODAL: VIEW BUILDING PROPERTIES */}
       {viewingBuildingProperties && (
@@ -3034,137 +4070,21 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
         </div>
       )}
 
-      {/* MODAL: ADD / EDIT DISTRICT & LOCATION */}
-      {isLocationModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#17243B]/80 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-lg p-6 border border-slate-200 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-base text-[#17243B] flex items-center gap-2">
-                <MapPin className="w-5 h-5 text-[#C6A878]" />
-                <span>{editingLocation ? 'Edit Cebu Prime District' : 'Add New Prime District'}</span>
-              </h3>
-              <button
-                onClick={() => setIsLocationModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveLocation} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  District / City Zone Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Cebu Business Park, Talamban, Cordova..."
-                  value={locName}
-                  onChange={(e) => setLocName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Tagline / High-Level Identifier
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Premier Financial District, Island Waterfront..."
-                  value={locTagline}
-                  onChange={(e) => setLocTagline(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  District Narrative & Highlights
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="Describe location appeal, nearby road networks, lifestyle amenities, and investment potential..."
-                  value={locDescription}
-                  onChange={(e) => setLocDescription(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Photograph Image URL
-                </label>
-                <input
-                  type="text"
-                  value={locImage}
-                  onChange={(e) => setLocImage(e.target.value)}
-                  placeholder="Enter image URL or select from presets below"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#C6A878]"
-                />
-
-                {/* Preset Image Options */}
-                <div className="pt-1">
-                  <span className="text-[10px] text-slate-500 block mb-1">Quick Select Available Cebu Assets:</span>
-                  <div className="flex flex-wrap gap-1.5 text-[10px]">
-                    {[
-                      { name: 'Alcoves Pool', url: '/assets/extracted/photo_the_alcoves.png' },
-                      { name: 'Park Avenue Tower', url: '/assets/extracted/photo_park_avenue.png' },
-                      { name: 'Mactan Coastal', url: '/assets/extracted/loc_mactan.png' },
-                      { name: 'Banilad Enclave', url: '/assets/extracted/loc_banilad.png' },
-                      { name: 'Skyline Panorama', url: '/assets/extracted/hero_skyline_clean.png' },
-                      { name: 'Astra Commercial', url: '/assets/extracted/astra_centre.png' },
-                    ].map((asset) => (
-                      <button
-                        key={asset.name}
-                        type="button"
-                        onClick={() => setLocImage(asset.url)}
-                        className={`px-2 py-1 rounded-lg border text-[10px] transition-colors ${
-                          locImage === asset.url
-                            ? 'bg-[#17243B] text-[#C6A878] border-[#17243B] font-bold'
-                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        {asset.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {locImage && (
-                  <div className="aspect-[16/9] w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 relative mt-2">
-                    <img
-                      src={locImage}
-                      alt="District Preview"
-                      className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsLocationModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingLoc}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-md disabled:opacity-50"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>{isSavingLoc ? 'Saving District...' : 'Save District'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <NeighborhoodFormModal
+        isOpen={isLocationModalOpen}
+        onClose={() => {
+          setIsLocationModalOpen(false);
+          setEditingLocation(null);
+        }}
+        editingLocation={editingLocation}
+        existingLocations={locationsList}
+        properties={properties}
+        otherReferencedImageUrls={getOtherReferencedUrls({
+          locationId: editingLocation?.id,
+        })}
+        onSaved={handleSavedLocation}
+        onPreview={(loc) => setContentPreview({ type: 'neighborhood', item: loc })}
+      />
 
       {/* MODAL: VIEW INQUIRY NOTIFICATION EMAIL */}
       {viewingInquiryEmail && (
@@ -3263,11 +4183,53 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
           setIsAddPropertyOpen(false);
           setEditingProperty(null);
         }}
-        onSaved={onPropertyUpdated}
+        onSaved={(savedProp) => {
+          onPropertyUpdated(savedProp);
+          setActionNotice({
+            type: 'success',
+            text: `Property "${savedProp.propertyTitle}" saved (${savedProp.status}).`,
+          });
+        }}
+        onPreview={(prop) => setContentPreview({ type: 'property', item: prop })}
         editingProperty={editingProperty}
+        existingProperties={properties}
         buildings={buildings}
         locations={locationsList}
+        otherReferencedImageUrls={getOtherReferencedUrls({
+          propertyId: editingProperty?.propertyId,
+        })}
         isSuperAdmin={true}
+      />
+
+      <ContentPreviewModal
+        preview={contentPreview}
+        onClose={() => setContentPreview(null)}
+        onOpenLivePage={onOpenPublicPath}
+      />
+
+      <ConfirmActionModal
+        isOpen={Boolean(confirmState)}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel}
+        isDestructive={confirmState?.isDestructive}
+        blockedReason={confirmState?.blockedReason}
+        secondaryLabel={confirmState?.secondaryLabel}
+        onSecondaryAction={confirmState?.onSecondaryAction}
+        isLoading={isConfirmBusy}
+        onConfirm={async () => {
+          if (!confirmState) return;
+          setIsConfirmBusy(true);
+          try {
+            await confirmState.onConfirm();
+          } finally {
+            setIsConfirmBusy(false);
+            setConfirmState(null);
+          }
+        }}
+        onCancel={() => {
+          if (!isConfirmBusy) setConfirmState(null);
+        }}
       />
     </div>
   );

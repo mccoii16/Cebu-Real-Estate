@@ -12,17 +12,33 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isUserDisabledOrDeleted() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status in ['disabled', 'deleted'];
+    }
+
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email.lower() == 'martiligando@gmail.com' ||
-        request.auth.token.role == 'superadmin' ||
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'martiligando@gmail.com') ||
+        (!isUserDisabledOrDeleted() && (
+          request.auth.token.role == 'superadmin' ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin')
+        ))
+      );
+    }
+
+    function isEditor() {
+      return isSignedIn() && !isUserDisabledOrDeleted() && (
+        request.auth.token.role == 'editor' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin')
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor')
       );
     }
 
     function isAgent() {
-      return isSignedIn() && (
+      return isSignedIn() && !isUserDisabledOrDeleted() && (
         request.auth.token.role == 'agent' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'agent')
@@ -46,7 +62,7 @@ service cloud.firestore {
       return data.uid is string && data.uid.size() <= 128 &&
              data.email is string && data.email.size() <= 200 &&
              data.displayName is string && data.displayName.size() <= 150 &&
-             data.role in ['superadmin', 'agent'] &&
+             data.role in ['superadmin', 'editor', 'agent', 'user'] &&
              data.status in ['active', 'disabled', 'deleted'];
     }
 
@@ -57,8 +73,19 @@ service cloud.firestore {
              data.location is string && data.location.size() <= 100 &&
              data.address is string && data.address.size() <= 250 &&
              data.description is string && data.description.size() <= 3000 &&
-             data.buildingImages is list && data.buildingImages.size() <= 20 &&
-             data.amenities is list && data.amenities.size() <= 50;
+             data.buildingImages is list && data.buildingImages.size() <= 30 &&
+             data.amenities is list && data.amenities.size() <= 50 &&
+             (!('status' in data) || data.status in ['published', 'unpublished', 'archived']);
+    }
+
+    // Validation for Neighborhood & Area (locations collection)
+    function isValidLocation(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 128 &&
+             data.tagline is string && data.tagline.size() <= 200 &&
+             data.description is string && data.description.size() <= 3000 &&
+             data.image is string && data.image.size() <= 1000 &&
+             (!('status' in data) || data.status in ['published', 'unpublished', 'archived']);
     }
 
     // Validation for Property
@@ -79,7 +106,7 @@ service cloud.firestore {
              data.amenities is list && data.amenities.size() <= 50 &&
              data.images is list && data.images.size() <= 30 &&
              data.featured is bool &&
-             data.status in ['draft', 'pending', 'approved', 'rejected'];
+             data.status in ['draft', 'pending', 'approved', 'rejected', 'archived'];
     }
 
     // Validation for Inquiry
@@ -91,40 +118,91 @@ service cloud.firestore {
              data.propertyInterest is string && data.propertyInterest.size() <= 200;
     }
 
-    // Users Collection
+    // Validation for AuditLog
+    function isValidAuditLog(data) {
+      return data.logId is string && data.logId.size() <= 128 &&
+             data.editorId is string && data.editorId.size() <= 128 &&
+             data.editorEmail is string && data.editorEmail.size() <= 200 &&
+             data.editorRole in ['editor', 'superadmin'] &&
+             data.contentType in ['property', 'building', 'neighborhood'] &&
+             data.contentId is string && data.contentId.size() <= 128 &&
+             data.action in ['create', 'update', 'publish', 'unpublish', 'archive', 'restore', 'upload_photo'] &&
+             data.changedFields is list && data.changedFields.size() <= 50 &&
+             data.timestamp is string && data.timestamp.size() <= 64;
+    }
+
+    // Helper: Validate Editor update against approval bypass & ownership reassignment
+    function isValidEditorPropertyUpdate() {
+      return !incoming().diff(existing()).affectedKeys().hasAny([
+        'propertyId',
+        'agentId',
+        'agentName',
+        'featured',
+        'createdAt',
+        'approvedAt',
+        'approvedBy',
+        'rejectionReason',
+        'hasPendingReview',
+        'pendingChanges'
+      ]) && (
+        // Archiving an unarchived property preserves pre-archive status
+        (existing().status != 'archived' &&
+         incoming().status == 'archived' &&
+         incoming().get('previousStatus', null) == existing().status) ||
+        // Restoring an archived property returns strictly to previousStatus (cannot bypass into approved)
+        (existing().status == 'archived' &&
+         incoming().status == existing().get('previousStatus', 'draft') &&
+         incoming().get('previousStatus', null) == null) ||
+        // Submitting an Editor-managed draft to Super Admin approval queue
+        (existing().status == 'draft' &&
+         incoming().status == 'pending' &&
+         incoming().get('previousStatus', null) == existing().get('previousStatus', null)) ||
+        // Normal editorial content/SEO/gallery update preserving approval status
+        (incoming().status == existing().status &&
+         incoming().get('previousStatus', null) == existing().get('previousStatus', null))
+      );
+    }
+
+    // Users Collection: Super Admin exclusive write access (users cannot self-assign roles)
     match /users/{userId} {
       allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow create, update: if isAdmin() && isValidUser(incoming());
+      allow delete: if isAdmin();
     }
 
-    // Buildings collection
+    // Buildings collection: Super Admin & active Editors can create/update; only Super Admin can delete
     match /buildings/{buildingId} {
       allow get: if isValidId(buildingId);
       allow list: if true;
-      allow create: if isValidId(buildingId) && isValidBuilding(incoming());
-      allow update, delete: if isAdmin();
+      allow create, update: if isValidId(buildingId) && isValidBuilding(incoming()) && (isAdmin() || isEditor());
+      allow delete: if isAdmin();
     }
 
     // Properties collection
     match /properties/{propertyId} {
-      // Public read ONLY for approved properties. Agents can see their own, and Super Admins can see all.
+      // Public read ONLY for approved properties. Agents see their own, Super Admins & Editors see all.
       allow get: if isValidId(propertyId) && (
         resource.data.status == 'approved' ||
-        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin()))
+        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin() || isEditor()))
       );
 
       allow list: if resource.data.status == 'approved' ||
-        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin()));
+        (isSignedIn() && (resource.data.agentId == request.auth.uid || isAdmin() || isEditor()));
 
       allow create: if isValidId(propertyId) && isValidProperty(incoming()) && (
         isAdmin() ||
-        (isAgent() && incoming().agentId == request.auth.uid && incoming().status in ['draft', 'pending']) ||
-        incoming().status == 'approved'
+        (isEditor() &&
+         incoming().status in ['draft', 'pending'] &&
+         incoming().featured == false &&
+         (!('approvedAt' in incoming()) || incoming().approvedAt == null) &&
+         (!('approvedBy' in incoming()) || incoming().approvedBy == null)) ||
+        (isAgent() && incoming().agentId == request.auth.uid && incoming().status in ['draft', 'pending'])
       );
 
       allow update: if isValidId(propertyId) && (
         isAdmin() ||
+        (isEditor() && isValidProperty(incoming()) && isValidEditorPropertyUpdate()) ||
         (
           isAgent() &&
           resource.data.agentId == request.auth.uid &&
@@ -138,28 +216,40 @@ service cloud.firestore {
         )
       );
 
+      // Editors cannot permanently delete properties
       allow delete: if isValidId(propertyId) && (
         isAdmin() ||
         (isAgent() && resource.data.agentId == request.auth.uid && resource.data.status == 'draft')
       );
     }
 
-    // Inquiries collection
+    // Inquiries collection: Super Admin only (Editors have zero access)
     match /inquiries/{inquiryId} {
       allow create: if isValidId(inquiryId) && isValidInquiry(incoming());
       allow get, list, update, delete: if isAdmin();
     }
 
-    // Locations collection
+    // Locations / Neighborhoods collection: Super Admin & active Editors can create/update; only Super Admin can delete
     match /locations/{locationId} {
+      allow read: if true;
+      allow create, update: if isValidId(locationId) && isValidLocation(incoming()) && (isAdmin() || isEditor());
+      allow delete: if isAdmin();
+    }
+
+    // Website settings: Super Admin only (Editors cannot change site/payment/email settings)
+    match /settings/{settingId} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
-    // Website settings
-    match /settings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // Immutable Content Change Audit Logs
+    match /audit_logs/{logId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(logId) && isValidAuditLog(incoming()) && (
+        isAdmin() ||
+        (isEditor() && incoming().editorId == request.auth.uid && incoming().editorRole == 'editor')
+      );
+      allow update, delete: if false;
     }
   }
 }

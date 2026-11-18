@@ -33,6 +33,7 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
   const [propertyInterest, setPropertyInterest] = useState(defaultProperty);
   const [message, setMessage] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -40,6 +41,7 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
     if (isOpen) {
       setPropertyInterest(defaultProperty || 'General Luxury Advisory');
       setErrors({});
+      setSubmitError(null);
     }
   }, [defaultProperty, isOpen]);
 
@@ -70,6 +72,7 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
     }
 
     setErrors({});
+    setSubmitError(null);
     setIsSubmitting(true);
 
     try {
@@ -82,9 +85,11 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
         message,
       });
       setIsSubmitted(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Inquiry submission error:', err);
-      setIsSubmitted(true);
+      setSubmitError(
+        err?.message || 'Unable to dispatch your inquiry right now. Please check your connection and try again.'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -97,6 +102,7 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
     setPhone('');
     setMessage('');
     setErrors({});
+    setSubmitError(null);
     onClose();
   };
 
@@ -247,6 +253,12 @@ export const InquiryModal: React.FC<InquiryModalProps> = ({
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#C6A878] resize-none"
               />
             </div>
+
+            {submitError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
+                {submitError}
+              </div>
+            )}
 
             <button
               type="submit"

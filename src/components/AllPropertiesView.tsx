@@ -21,6 +21,10 @@ import {
 } from '../types/property';
 import { INITIAL_LOCATIONS } from './FloatingSearchBar';
 import { formatPHP, paginateItems } from '../utils/filterProperties';
+import {
+  isBuildingPubliclyVisible,
+  isNeighborhoodPubliclyVisible,
+} from '../utils/contentManagement';
 
 interface AllPropertiesViewProps {
   isOpen: boolean;
@@ -54,12 +58,18 @@ export const AllPropertiesView: React.FC<AllPropertiesViewProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
 
   const locationOptions = useMemo(() => {
+    const visible = (locations || []).filter(isNeighborhoodPubliclyVisible);
     const dynamicNames =
-      locations && locations.length > 0
-        ? locations.map((l) => l.name)
+      visible.length > 0
+        ? visible.map((l) => l.name)
         : INITIAL_LOCATIONS.filter((l) => l !== 'All Areas');
     return ['All Areas', ...Array.from(new Set(dynamicNames))];
   }, [locations]);
+
+  const publicBuildings = useMemo(
+    () => buildings.filter(isBuildingPubliclyVisible),
+    [buildings]
+  );
 
   // Reset to page 1 when filter or result count changes
   useEffect(() => {
@@ -140,10 +150,10 @@ export const AllPropertiesView: React.FC<AllPropertiesViewProps> = ({
               </div>
             </div>
 
-            {/* Location Selector */}
+            {/* Neighborhood & Areas Selector */}
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Location
+                Neighborhood &amp; Areas
               </label>
               <select
                 value={filter.location}
@@ -169,7 +179,7 @@ export const AllPropertiesView: React.FC<AllPropertiesViewProps> = ({
                 className="w-full h-10 px-2.5 rounded-lg border border-slate-200 text-xs text-slate-900 bg-slate-50 focus:outline-none focus:ring-1 focus:ring-[#C6A878]"
               >
                 <option value="all">All Buildings</option>
-                {buildings.map((b) => (
+                {publicBuildings.map((b) => (
                   <option key={b.buildingId} value={b.buildingId}>
                     {b.buildingName}
                   </option>

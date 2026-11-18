@@ -1,26 +1,31 @@
-import { collection, doc, getDocs, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, setDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { LocationHighlight } from '../types/property';
+import { findNeighborhoodBySlug } from '../utils/slugs';
+import { isNeighborhoodPubliclyVisible } from '../utils/contentManagement';
 
 export const INITIAL_LOCATIONS: LocationHighlight[] = [
   {
     id: 'loc-cbp',
+    slug: 'cebu-business-park',
     name: 'Cebu Business Park',
     tagline: 'Premier Financial District',
     propertyCount: 24,
-    image: '/assets/extracted/photo_the_alcoves.png',
+    image: '/assets/extracted/loc_cebu_business_park.png',
     description: 'Cebu’s premier corporate and lifestyle hub hosting top residential condominiums and Ayala Center Cebu.',
   },
   {
     id: 'loc-it-park',
+    slug: 'cebu-it-park',
     name: 'Cebu IT Park',
     tagline: 'Tech & Lifestyle Metropolis',
     propertyCount: 18,
-    image: '/assets/extracted/photo_park_avenue.png',
+    image: '/assets/extracted/loc_it_park.png',
     description: 'The 24/7 vibrant tech district featuring 38 Park Avenue and high-energy dining corridors.',
   },
   {
     id: 'loc-mactan',
+    slug: 'mactan-newtown',
     name: 'Mactan Newtown',
     tagline: 'Coastal Township & Gateway',
     propertyCount: 15,
@@ -29,6 +34,7 @@ export const INITIAL_LOCATIONS: LocationHighlight[] = [
   },
   {
     id: 'loc-banilad',
+    slug: 'banilad',
     name: 'Banilad',
     tagline: 'Upscale Residential Corridor',
     propertyCount: 11,
@@ -37,6 +43,7 @@ export const INITIAL_LOCATIONS: LocationHighlight[] = [
   },
   {
     id: 'loc-lahug',
+    slug: 'lahug',
     name: 'Lahug',
     tagline: 'Highland Panoramas & Marco Polo',
     propertyCount: 8,
@@ -45,6 +52,7 @@ export const INITIAL_LOCATIONS: LocationHighlight[] = [
   },
   {
     id: 'loc-srp',
+    slug: 'srp',
     name: 'SRP',
     tagline: 'South Road Properties Coastal',
     propertyCount: 7,
@@ -53,6 +61,7 @@ export const INITIAL_LOCATIONS: LocationHighlight[] = [
   },
   {
     id: 'loc-mandaue',
+    slug: 'mandaue',
     name: 'Mandaue',
     tagline: 'Industrial & Urban Gateway',
     propertyCount: 6,
@@ -61,6 +70,7 @@ export const INITIAL_LOCATIONS: LocationHighlight[] = [
   },
   {
     id: 'loc-lapu-lapu',
+    slug: 'lapu-lapu-city',
     name: 'Lapu-Lapu City',
     tagline: 'Island Resort & Waterfront',
     propertyCount: 9,
@@ -83,6 +93,35 @@ export async function getAllLocations(): Promise<LocationHighlight[]> {
     console.warn('Could not read locations from Firestore, falling back to defaults:', err);
   }
   return INITIAL_LOCATIONS;
+}
+
+export async function getNeighborhoodBySlug(
+  slug: string,
+  options?: { includeUnpublished?: boolean }
+): Promise<LocationHighlight | null> {
+  const includeUnpublished = Boolean(options?.includeUnpublished);
+  try {
+    try {
+      const q = query(collection(db, LOCATIONS_COLLECTION), where('slug', '==', slug));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const matched = snap.docs[0].data() as LocationHighlight;
+        if (!includeUnpublished && !isNeighborhoodPubliclyVisible(matched)) {
+          return null;
+        }
+        return matched;
+      }
+    } catch {
+      // Fallback below
+    }
+    const all = await getAllLocations();
+    const candidates = includeUnpublished
+      ? all
+      : all.filter(isNeighborhoodPubliclyVisible);
+    return findNeighborhoodBySlug(candidates, slug);
+  } catch {
+    return null;
+  }
 }
 
 export async function saveLocation(loc: LocationHighlight): Promise<void> {
