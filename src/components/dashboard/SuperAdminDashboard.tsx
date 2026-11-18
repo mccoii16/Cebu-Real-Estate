@@ -46,6 +46,7 @@ import {
   UserCog,
   History,
   RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import {
   PropertyDoc,
@@ -98,6 +99,7 @@ import {
   getEffectivePublishStatus,
 } from '../../utils/contentManagement';
 import { inferAuditAction } from '../../utils/editorPermissions';
+import { syncWebsiteSettingsPayload } from '../../utils/heroSettings';
 
 interface SuperAdminDashboardProps {
   properties: PropertyDoc[];
@@ -261,6 +263,12 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   );
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState(false);
+  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null);
+  const [uploadingSlideIdx, setUploadingSlideIdx] = useState<number | null>(null);
+  const [slideFeedback, setSlideFeedback] = useState<
+    Record<number, { type: 'success' | 'error'; text: string }>
+  >({});
+  const [brokenSlidePreviews, setBrokenSlidePreviews] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     setAdminPropsPage(1);
@@ -366,6 +374,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     try {
       const s = await getWebsiteSettings();
       setSiteSettings(s);
+      if (onSettingsUpdated) onSettingsUpdated(s);
     } catch (err) {
       console.error('Error loading settings:', err);
     }
@@ -612,20 +621,27 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   };
 
   // Save Website Settings
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setIsSavingSettings(true);
     setSettingsSaveSuccess(false);
+    setSettingsSaveError(null);
     setActionNotice(null);
     try {
       const adminEmail = user?.email || 'Martiligando@gmail.com';
-      const updated = await saveWebsiteSettings(siteSettings, adminEmail);
+      const synced = syncWebsiteSettingsPayload(
+        siteSettings,
+        DEFAULT_WEBSITE_SETTINGS.heroSlides || []
+      );
+      const updated = await saveWebsiteSettings(synced, adminEmail);
       setSiteSettings(updated);
       if (onSettingsUpdated) onSettingsUpdated(updated);
       setSettingsSaveSuccess(true);
       setTimeout(() => setSettingsSaveSuccess(false), 4000);
     } catch (err: any) {
-      setActionNotice({ type: 'error', text: `Failed to save settings: ${err.message}` });
+      const msg = err?.message || 'Could not write website settings to Firestore.';
+      setSettingsSaveError(`Failed to save settings: ${msg}`);
+      setActionNotice({ type: 'error', text: `Failed to save settings: ${msg}` });
     } finally {
       setIsSavingSettings(false);
     }
@@ -3056,26 +3072,44 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold font-serif text-[#17243B]">
-                    Website Brand & Showcase Settings
+                    Website Brand &amp; Showcase Settings
                   </h2>
                   <p className="text-xs text-slate-500 mt-1">
-                    Update website branding, hero titles, contact information, and social links in real time without code deployment.
+                    Update website branding, hero background slides, contact information, and social links in real time without code deployment.
                   </p>
                 </div>
-                {settingsSaveSuccess && (
-                  <div className="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1.5 animate-pulse">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Settings Saved to Firestore!</span>
-                  </div>
-                )}
+                <div className="flex flex-wrap items-center gap-3">
+                  {settingsSaveSuccess && (
+                    <div className="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Settings Saved to Firestore!</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSaveSettings()}
+                    disabled={isSavingSettings || uploadingSlideIdx !== null}
+                    className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-xl bg-[#17243B] hover:bg-[#253754] text-[#C6A878] font-bold text-xs shadow-sm transition-colors disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Save className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>{isSavingSettings ? 'Saving...' : 'Save Settings'}</span>
+                  </button>
+                </div>
               </div>
+
+              {settingsSaveError && (
+                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                  <span className="font-medium">{settingsSaveError}</span>
+                </div>
+              )}
 
               <form onSubmit={handleSaveSettings} className="space-y-6">
                 {/* Branding & Hero Section */}
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                   <h3 className="font-bold text-sm text-[#17243B] flex items-center gap-2 pb-2 border-b border-slate-100">
                     <Globe className="w-4 h-4 text-[#C6A878]" />
-                    <span>Brand Identity & Hero Showcase</span>
+                    <span>Brand Identity &amp; Hero Showcase</span>
                   </h3>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -3139,10 +3173,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     <div>
                       <h3 className="font-bold text-sm text-[#17243B] flex items-center gap-2">
                         <Layers className="w-4 h-4 text-[#C6A878]" />
-                        <span>Landing Page Media & Hero Showcase Slides</span>
+                        <span>Landing Page Media &amp; Hero Showcase Slides</span>
                       </h3>
                       <p className="text-[11px] text-slate-500 mt-0.5">
-                        Master Authority controls for homepage carousel slides, high-resolution imagery, and architectural highlights.
+                        Master Authority controls for homepage carousel slides. Uploading a new photo automatically publishes it to the homepage hero; click Save Settings after editing text or pasted URLs.
                       </p>
                     </div>
 
@@ -3206,11 +3240,48 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                             <div className="aspect-[16/9] rounded-lg overflow-hidden border border-slate-300 bg-slate-200 relative">
                               <img
                                 src={slide.image}
-                                alt="Slide Preview"
+                                alt={`Slide ${sIdx + 1} Preview`}
+                                onLoad={() => {
+                                  if (brokenSlidePreviews[sIdx]) {
+                                    setBrokenSlidePreviews((prev) => ({ ...prev, [sIdx]: false }));
+                                  }
+                                }}
+                                onError={() => {
+                                  setBrokenSlidePreviews((prev) => ({ ...prev, [sIdx]: true }));
+                                }}
                                 className="w-full h-full object-cover"
                                 referrerPolicy="no-referrer"
                               />
+                              {uploadingSlideIdx === sIdx && (
+                                <div className="absolute inset-0 bg-[#17243B]/75 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 text-white text-xs font-semibold">
+                                  <Loader2 className="w-5 h-5 animate-spin text-[#C6A878]" />
+                                  <span>Uploading &amp; publishing photo...</span>
+                                </div>
+                              )}
+                              {brokenSlidePreviews[sIdx] && uploadingSlideIdx !== sIdx && (
+                                <div className="absolute inset-x-2 bottom-2 px-2.5 py-1.5 rounded-lg bg-amber-950/90 text-amber-100 text-[10px] font-medium flex items-center gap-1.5">
+                                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                                  <span>Preview failed to load. Upload a new image or replace this URL.</span>
+                                </div>
+                              )}
                             </div>
+
+                            {slideFeedback[sIdx] && (
+                              <div
+                                className={`p-2 rounded-lg text-[11px] font-medium flex items-center gap-1.5 ${
+                                  slideFeedback[sIdx].type === 'error'
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {slideFeedback[sIdx].type === 'error' ? (
+                                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                                ) : (
+                                  <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                )}
+                                <span>{slideFeedback[sIdx].text}</span>
+                              </div>
+                            )}
 
                             <div>
                               <div className="flex items-center justify-between mb-1">
@@ -3219,24 +3290,82 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 </label>
                                 <label className="cursor-pointer text-[10px] text-[#C6A878] hover:text-[#17243B] font-semibold flex items-center gap-1">
                                   <Upload className="w-3 h-3" />
-                                  <span>Upload New Photo</span>
+                                  <span>{uploadingSlideIdx === sIdx ? 'Uploading...' : 'Upload New Photo'}</span>
                                   <input
                                     type="file"
                                     accept="image/*"
+                                    disabled={uploadingSlideIdx !== null}
                                     className="hidden"
                                     onChange={async (e) => {
-                                      const file = e.target.files?.[0];
+                                      const inputEl = e.currentTarget;
+                                      const file = inputEl.files?.[0];
                                       if (!file) return;
+                                      if (!file.type.startsWith('image/')) {
+                                        setSlideFeedback((prev) => ({
+                                          ...prev,
+                                          [sIdx]: {
+                                            type: 'error',
+                                            text: 'Please choose a valid image file (PNG, JPG, WEBP).',
+                                          },
+                                        }));
+                                        inputEl.value = '';
+                                        return;
+                                      }
+                                      if (file.size > 10 * 1024 * 1024) {
+                                        setSlideFeedback((prev) => ({
+                                          ...prev,
+                                          [sIdx]: {
+                                            type: 'error',
+                                            text: 'Image exceeds the 10 MB Storage limit.',
+                                          },
+                                        }));
+                                        inputEl.value = '';
+                                        return;
+                                      }
+
+                                      setUploadingSlideIdx(sIdx);
+                                      setSlideFeedback((prev) => {
+                                        const next = { ...prev };
+                                        delete next[sIdx];
+                                        return next;
+                                      });
+                                      setBrokenSlidePreviews((prev) => ({ ...prev, [sIdx]: false }));
+
                                       try {
                                         const res = await uploadSiteAsset(file, 'hero-slides');
                                         const updatedSlides = [...(siteSettings.heroSlides || [])];
                                         updatedSlides[sIdx] = { ...slide, image: res.url };
-                                        setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
+                                        const nextSettings = syncWebsiteSettingsPayload(
+                                          { ...siteSettings, heroSlides: updatedSlides },
+                                          DEFAULT_WEBSITE_SETTINGS.heroSlides || []
+                                        );
+                                        setSiteSettings(nextSettings);
+
+                                        const adminEmail = user?.email || 'Martiligando@gmail.com';
+                                        const saved = await saveWebsiteSettings(nextSettings, adminEmail);
+                                        setSiteSettings(saved);
+                                        if (onSettingsUpdated) onSettingsUpdated(saved);
+
+                                        setSlideFeedback((prev) => ({
+                                          ...prev,
+                                          [sIdx]: {
+                                            type: 'success',
+                                            text: 'Uploaded & published to homepage hero.',
+                                          },
+                                        }));
                                       } catch (err: any) {
-                                        setActionNotice({
-                                          type: 'error',
-                                          text: 'Slide upload failed: ' + (err.message || 'Check Storage rules'),
-                                        });
+                                        const msg =
+                                          err?.code === 'storage/unauthorized'
+                                            ? 'Firebase Storage blocked the upload. Deploy storage.rules or paste an HTTPS image URL below and click Save Settings.'
+                                            : err?.message || 'Could not upload and save hero image.';
+                                        setSlideFeedback((prev) => ({
+                                          ...prev,
+                                          [sIdx]: { type: 'error', text: msg },
+                                        }));
+                                        setActionNotice({ type: 'error', text: `Slide #${sIdx + 1} upload failed: ${msg}` });
+                                      } finally {
+                                        setUploadingSlideIdx(null);
+                                        inputEl.value = '';
                                       }
                                     }}
                                   />
@@ -3248,6 +3377,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                 onChange={(e) => {
                                   const updatedSlides = [...(siteSettings.heroSlides || [])];
                                   updatedSlides[sIdx] = { ...slide, image: e.target.value };
+                                  setBrokenSlidePreviews((prev) => ({ ...prev, [sIdx]: false }));
                                   setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
                                 }}
                                 className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono"
@@ -3272,6 +3402,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                                     onClick={() => {
                                       const updatedSlides = [...(siteSettings.heroSlides || [])];
                                       updatedSlides[sIdx] = { ...slide, image: preset.url };
+                                      setBrokenSlidePreviews((prev) => ({ ...prev, [sIdx]: false }));
                                       setSiteSettings({ ...siteSettings, heroSlides: updatedSlides });
                                     }}
                                     className="px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-700 hover:border-[#C6A878] hover:text-[#17243B] transition-colors"

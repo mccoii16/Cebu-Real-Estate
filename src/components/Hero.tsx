@@ -1,18 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { HeroSlideConfig, WebsiteSettings } from '../types/property';
+import { DEFAULT_HERO_FALLBACK_IMAGE, resolveHeroSlides } from '../utils/heroSettings';
 
-interface HeroSlide {
-  id: number;
-  label: string;
-  location: string;
-  image: string;
-  headlineLine1: string;
-  headlineLine2: string;
-  subheading: string;
-}
-
-const HERO_SLIDES: HeroSlide[] = [
+const HERO_SLIDES: HeroSlideConfig[] = [
   {
     id: 1,
     label: '01',
@@ -42,70 +34,64 @@ const HERO_SLIDES: HeroSlide[] = [
   },
 ];
 
-import { WebsiteSettings } from '../types/property';
-
 interface HeroProps {
   onExploreClick: () => void;
   settings?: WebsiteSettings;
+  isHydratingSettings?: boolean;
 }
 
-export const Hero: React.FC<HeroProps> = ({ onExploreClick, settings }) => {
+export const Hero: React.FC<HeroProps> = ({
+  onExploreClick,
+  settings,
+  isHydratingSettings = false,
+}) => {
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
-  const activeSlides: HeroSlide[] =
-    settings?.heroSlides && settings.heroSlides.length > 0
-      ? settings.heroSlides.map((s, idx) => ({
-          id: s.id || idx + 1,
-          label: s.label || `0${idx + 1}`,
-          location: s.location || 'Cebu Prime District',
-          image: s.image,
-          headlineLine1: s.headlineLine1 || 'Find Your Perfect',
-          headlineLine2: s.headlineLine2 || 'Property in Cebu',
-          subheading: s.subheading || 'Modern living. Prime locations. Endless possibilities.',
-        }))
-      : HERO_SLIDES;
+  const activeSlides = useMemo(
+    () => resolveHeroSlides(settings, HERO_SLIDES),
+    [settings]
+  );
+
+  // Reset failed image tracking whenever hero settings are updated or reloaded
+  useEffect(() => {
+    setFailedImages({});
+  }, [settings?.updatedAt, settings?.heroSlides, settings?.heroImages]);
+
+  // Clamp slide index if slides were removed
+  useEffect(() => {
+    if (currentSlideIndex >= activeSlides.length) {
+      setCurrentSlideIndex(0);
+    }
+  }, [activeSlides.length, currentSlideIndex]);
+
+  const safeIndex = currentSlideIndex < activeSlides.length ? currentSlideIndex : 0;
 
   const prevSlide = () => {
-    setCurrentSlideIndex((prev) => (prev === 0 ? activeSlides.length - 1 : prev - 1));
+    setCurrentSlideIndex((prev) => (prev <= 0 ? activeSlides.length - 1 : prev - 1));
   };
 
   const nextSlide = () => {
-    setCurrentSlideIndex((prev) => (prev === activeSlides.length - 1 ? 0 : prev + 1));
+    setCurrentSlideIndex((prev) => (prev >= activeSlides.length - 1 ? 0 : prev + 1));
   };
 
   // Subtle auto-advance every 8 seconds
   useEffect(() => {
+    if (activeSlides.length <= 1) return;
     const timer = setInterval(() => {
-      setCurrentSlideIndex((prev) => (prev === activeSlides.length - 1 ? 0 : prev + 1));
+      setCurrentSlideIndex((prev) => (prev >= activeSlides.length - 1 ? 0 : prev + 1));
     }, 8000);
     return () => clearInterval(timer);
   }, [activeSlides.length]);
 
-  const currentSlide = activeSlides[currentSlideIndex] || activeSlides[0];
-  const fallbackSlideImage = HERO_SLIDES[currentSlideIndex]?.image || '/assets/extracted/hero_skyline_clean.png';
+  const currentSlide = activeSlides[safeIndex] || activeSlides[0];
+  const fallbackSlideImage =
+    HERO_SLIDES[safeIndex]?.image || DEFAULT_HERO_FALLBACK_IMAGE;
   const resolvedSlideImage =
-    failedSrc && failedSrc === currentSlide.image ? fallbackSlideImage : currentSlide.image;
+    currentSlide.image && !failedImages[currentSlide.image]
+      ? currentSlide.image
+      : fallbackSlideImage;
   const badgeText = settings?.heroBadge?.trim() || 'LIVE • INVEST • THRIVE';
-
-  // Recover if an external custom slide URL hangs/fails to load without flashing default upfront
-  useEffect(() => {
-    const imgSrc = currentSlide.image;
-    if (!imgSrc || !imgSrc.startsWith('http')) return;
-    let active = true;
-    const timeoutId = setTimeout(() => {
-      if (active) {
-        const imgEl = document.querySelector<HTMLImageElement>('img[data-hero-slide="true"]');
-        if (imgEl && (!imgEl.complete || imgEl.naturalWidth === 0)) {
-          setFailedSrc(imgSrc);
-        }
-      }
-    }, 4500);
-    return () => {
-      active = false;
-      clearTimeout(timeoutId);
-    };
-  }, [currentSlide.image]);
 
   return (
     <section className="relative w-full bg-[#17243B] min-h-[540px] sm:min-h-[580px] lg:min-h-[640px] pt-2 sm:pt-4 pb-24 sm:pb-32 overflow-hidden flex flex-col justify-between">
@@ -116,32 +102,38 @@ export const Hero: React.FC<HeroProps> = ({ onExploreClick, settings }) => {
         <div className="absolute bottom-0 inset-x-0 h-40 bg-gradient-to-t from-[#17243B] to-transparent z-10" />
 
         {/* Right-aligned Architectural Skyline Photo */}
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={resolvedSlideImage || currentSlide.id}
-            initial={{ opacity: 0.85 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute right-0 top-0 bottom-0 w-full lg:w-3/5 h-full"
-          >
-            <img
-              data-hero-slide="true"
-              src={resolvedSlideImage}
-              alt="Cebu Prime Skyline"
-              loading="eager"
-              decoding="async"
-              onError={() => {
-                setFailedSrc(currentSlide.image);
-              }}
-              className="w-full h-full object-cover object-center lg:object-right filter brightness-[0.92] contrast-[1.05]"
-              referrerPolicy="no-referrer"
-            />
-            {/* Soft left gradient fade over image */}
-            <div className="absolute inset-0 bg-gradient-to-r from-[#17243B] via-transparent to-black/20" />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#17243B] via-transparent to-transparent opacity-80" />
-          </motion.div>
-        </AnimatePresence>
+        {!isHydratingSettings && (
+          <AnimatePresence mode="sync" initial={false}>
+            <motion.div
+              key={`${currentSlide.id}-${resolvedSlideImage}`}
+              initial={{ opacity: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute right-0 top-0 bottom-0 w-full lg:w-3/5 h-full"
+            >
+              <img
+                data-hero-slide="true"
+                src={resolvedSlideImage}
+                alt={currentSlide.location || 'Cebu Prime Skyline'}
+                loading="eager"
+                decoding="sync"
+                onError={() => {
+                  if (currentSlide.image && currentSlide.image !== fallbackSlideImage) {
+                    setFailedImages((prev) =>
+                      prev[currentSlide.image] ? prev : { ...prev, [currentSlide.image]: true }
+                    );
+                  }
+                }}
+                className="w-full h-full object-cover object-center lg:object-right filter brightness-[0.92] contrast-[1.05]"
+                referrerPolicy="no-referrer"
+              />
+              {/* Soft left gradient fade over image */}
+              <div className="absolute inset-0 bg-gradient-to-r from-[#17243B] via-transparent to-black/20" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#17243B] via-transparent to-transparent opacity-80" />
+            </motion.div>
+          </AnimatePresence>
+        )}
       </div>
 
       {/* Hero Content Grid */}

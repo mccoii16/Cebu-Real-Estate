@@ -33,7 +33,11 @@ import {
   applyPropertyFilters,
 } from './services/propertyService';
 import { getAllLocations, getNeighborhoodBySlug } from './services/locationService';
-import { getWebsiteSettings, getCachedWebsiteSettings } from './services/settingsService';
+import {
+  getWebsiteSettings,
+  getCachedWebsiteSettings,
+  hasCachedWebsiteSettings,
+} from './services/settingsService';
 import { testFirestoreConnection } from './services/firebase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import {
@@ -50,6 +54,7 @@ import {
   isBuildingPubliclyVisible,
   isNeighborhoodPubliclyVisible,
 } from './utils/contentManagement';
+import { parseSavedFavorites } from './utils/heroSettings';
 
 const DEFAULT_FILTER: PropertyFilter = {
   type: 'All Types',
@@ -86,6 +91,9 @@ function MainApp() {
 
   const [locations, setLocations] = useState<LocationHighlight[]>([]);
   const [siteSettings, setSiteSettings] = useState<WebsiteSettings>(getCachedWebsiteSettings);
+  const [isSettingsHydrating, setIsSettingsHydrating] = useState<boolean>(
+    () => !hasCachedWebsiteSettings()
+  );
 
   const [resolvedPropertyFallback, setResolvedPropertyFallback] = useState<PropertyDoc | null>(null);
   const [resolvedBuildingFallback, setResolvedBuildingFallback] = useState<BuildingDoc | null>(null);
@@ -93,13 +101,14 @@ function MainApp() {
   const [isResolvingRoute, setIsResolvingRoute] = useState(false);
   const [attemptedLookupPath, setAttemptedLookupPath] = useState<string | null>(null);
 
-  // Favorites state with localStorage
+  // Favorites state with localStorage (starts empty for first-time visitors)
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('cebu_prime_favorites');
-      return saved ? JSON.parse(saved) : ['prop-alcoves-18b'];
+      const saved =
+        typeof window !== 'undefined' ? localStorage.getItem('cebu_prime_favorites') : null;
+      return parseSavedFavorites(saved);
     } catch {
-      return ['prop-alcoves-18b'];
+      return [];
     }
   });
 
@@ -121,6 +130,32 @@ function MainApp() {
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Hydrate public website settings immediately on mount without waiting for seeding
+  useEffect(() => {
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      if (active) setIsSettingsHydrating(false);
+    }, 900);
+
+    getWebsiteSettings()
+      .then((fetchedSettings) => {
+        if (active) {
+          setSiteSettings(fetchedSettings);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          window.clearTimeout(timeoutId);
+          setIsSettingsHydrating(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
   }, []);
 
   // Load Firestore data on mount or when user role changes
@@ -147,6 +182,7 @@ function MainApp() {
       setBuildings(fetchedBuildings);
       setLocations(fetchedLocations);
       setSiteSettings(fetchedSettings);
+      setIsSettingsHydrating(false);
     } catch (err) {
       console.error('Error fetching Firestore properties:', err);
     } finally {
@@ -578,6 +614,7 @@ function MainApp() {
                 if (el) el.scrollIntoView({ behavior: 'smooth' });
               }}
               settings={siteSettings}
+              isHydratingSettings={isSettingsHydrating}
             />
           </div>
 

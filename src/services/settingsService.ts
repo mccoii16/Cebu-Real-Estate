@@ -2,6 +2,7 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { WebsiteSettings } from '../types/property';
 import { DEFAULT_INQUIRY_EMAIL_SUBJECT, DEFAULT_INQUIRY_EMAIL_BODY } from '../utils/filterProperties';
+import { syncWebsiteSettingsPayload } from '../utils/heroSettings';
 
 export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
   siteName: 'CEBU PRIME',
@@ -59,6 +60,15 @@ export const DEFAULT_WEBSITE_SETTINGS: WebsiteSettings = {
 const SETTINGS_DOC_REF = doc(db, 'settings', 'general');
 const SETTINGS_STORAGE_KEY = 'cebu_prime_site_settings_v2';
 
+export function hasCachedWebsiteSettings(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Boolean(localStorage.getItem(SETTINGS_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Synchronously retrieves cached settings from localStorage for instant 0-delay render.
  * Eliminates the split-second photo flicker on page refresh before Firestore resolves.
@@ -69,7 +79,10 @@ export function getCachedWebsiteSettings(): WebsiteSettings {
       const cached = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        return { ...DEFAULT_WEBSITE_SETTINGS, ...parsed };
+        return syncWebsiteSettingsPayload(
+          { ...DEFAULT_WEBSITE_SETTINGS, ...parsed },
+          DEFAULT_WEBSITE_SETTINGS.heroSlides || []
+        );
       }
     } catch {
       // ignore
@@ -82,7 +95,10 @@ export async function getWebsiteSettings(): Promise<WebsiteSettings> {
   try {
     const snap = await getDoc(SETTINGS_DOC_REF);
     if (snap.exists()) {
-      const merged = { ...DEFAULT_WEBSITE_SETTINGS, ...(snap.data() as Partial<WebsiteSettings>) };
+      const merged = syncWebsiteSettingsPayload(
+        { ...DEFAULT_WEBSITE_SETTINGS, ...(snap.data() as Partial<WebsiteSettings>) },
+        DEFAULT_WEBSITE_SETTINGS.heroSlides || []
+      );
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
@@ -100,12 +116,17 @@ export async function saveWebsiteSettings(
   settings: Partial<WebsiteSettings>,
   updatedBy: string
 ): Promise<WebsiteSettings> {
-  const merged: WebsiteSettings = {
-    ...DEFAULT_WEBSITE_SETTINGS,
-    ...settings,
-    updatedAt: new Date().toISOString(),
-    updatedBy,
-  };
+  const merged = syncWebsiteSettingsPayload(
+    {
+      ...DEFAULT_WEBSITE_SETTINGS,
+      ...settings,
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    },
+    DEFAULT_WEBSITE_SETTINGS.heroSlides || []
+  );
+
+  await setDoc(SETTINGS_DOC_REF, merged, { merge: true });
 
   if (typeof window !== 'undefined') {
     try {
@@ -113,10 +134,5 @@ export async function saveWebsiteSettings(
     } catch {}
   }
 
-  try {
-    await setDoc(SETTINGS_DOC_REF, merged, { merge: true });
-  } catch (err) {
-    console.warn('Could not save settings to Firestore (preserved in local cache):', err);
-  }
   return merged;
 }
